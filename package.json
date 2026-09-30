@@ -280,6 +280,7 @@
     "electron-updater": "6.8.9",
     "mediabunny": "1.60.0",
     "music-metadata": "^11.16.1",
+    "qrcode-generator": "^2.0.4",
     "ws": "^8.22.0"
   }
 }

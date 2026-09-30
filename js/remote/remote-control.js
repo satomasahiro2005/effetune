@@ -7,11 +7,21 @@ import {
     convertLongToShortFormat,
     getSerializablePluginStateShort
 } from '../utils/serialization-utils.js';
+import { identifySingleIr } from '../ir-library/ir-library-id.js';
+import { isSupportedIrFileName } from '../ir-library/audio-header-metadata.js';
 
 const STATE_MIN_INTERVAL_MS = 100;
 const SAFETY_POLL_MS = 1000;
 const HISTORY_SAVE_DEBOUNCE_MS = 1000;
 const MAX_CHAIN_ITEMS = 256;
+const MAX_PRESET_NAME_LENGTH = 256;
+const FORBIDDEN_PRESET_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
+const IR_ID_PATTERN = /^[a-f0-9]{24}$/;
+
+function extensionOf(fileName) {
+    const match = String(fileName || '').toLowerCase().match(/\.([a-z0-9]{1,10})$/);
+    return match ? match[1] : '';
+}
 
 export async function startRemoteControl(win = window) {
     const api = win.electronAPI?.remoteV1;
@@ -33,6 +43,9 @@ class RemoteControl {
         this.pollTimer = null;
         this.historyTimer = null;
         this.disposeRequestListener = null;
+        this.disposeStatusListener = null;
+        // Snapshots are only published while the server in main is running.
+        this.active = false;
     }
 
     async start() {
@@ -46,18 +59,30 @@ class RemoteControl {
             console.warn('[remote] renderer-ready failed:', error);
             status = null;
         }
-        if (!status || status.enabled !== true) {
+        if (!status || typeof status !== 'object') {
             this.disposeRequestListener?.();
             this.disposeRequestListener = null;
             return false;
         }
+        // The server can be switched on and off at runtime (Settings > Remote Control).
+        this.disposeStatusListener = this.api.onStatus?.(next => this.setActive(next?.enabled === true)) || null;
         this.installHooks();
         this.win.addEventListener('pagehide', () => {
             this.api.rendererUnavailable().catch(() => {});
         }, { once: true });
-        console.log('[remote] renderer ready; remote control enabled');
-        this.schedulePublish();
+        console.log('[remote] renderer bridge ready; server ' + (status.enabled ? 'running' : 'off'));
+        this.setActive(status.enabled === true);
         return true;
+    }
+
+    setActive(active) {
+        const wasActive = this.active;
+        this.active = active;
+        if (active && !wasActive) {
+            // The host dropped its snapshot; publish a fresh one.
+            this.lastSentJson = null;
+            this.schedulePublish();
+        }
     }
 
     // ---- state -----------------------------------------------------------
@@ -95,7 +120,7 @@ class RemoteControl {
     }
 
     schedulePublish() {
-        if (this.publishTimer) return;
+        if (!this.active || this.publishTimer) return;
         const wait = Math.max(0, STATE_MIN_INTERVAL_MS - (Date.now() - this.lastSentAt));
         this.publishTimer = setTimeout(() => {
             this.publishTimer = null;
@@ -159,6 +184,14 @@ class RemoteControl {
                 return this.opListPresets();
             case 'getPreset':
                 return this.opGetPreset(msg);
+            case 'savePreset':
+                return this.opSavePreset(msg);
+            case 'listIRs':
+                return this.opListIRs();
+            case 'getIR':
+                return this.opGetIR(msg);
+            case 'putIR':
+                return this.opPutIR(msg);
             default:
                 throw new Error('unknown-op: ' + msg.op);
         }
@@ -170,19 +203,24 @@ class RemoteControl {
         return { audioManager, pipelineManager, pluginManager };
     }
 
-    async opChain(msg) {
-        const { audioManager, pipelineManager, pluginManager } = this.requireApp();
-        const items = msg.pipeline;
+    validatePipelineItems(items) {
+        const { pluginManager } = this.requireApp();
         if (!Array.isArray(items)) throw new Error('pipeline must be an array');
         if (items.length > MAX_CHAIN_ITEMS) throw new Error('pipeline too long');
         for (const [i, item] of items.entries()) {
-            if (!item || typeof item !== 'object' || typeof item.nm !== 'string') {
+            if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.nm !== 'string') {
                 throw new Error('invalid item at ' + i);
             }
             if (!pluginManager.isPluginAvailable(item.nm)) {
                 throw new Error('unknown effect: ' + item.nm);
             }
         }
+        return items;
+    }
+
+    async opChain(msg) {
+        const { audioManager, pipelineManager } = this.requireApp();
+        const items = this.validatePipelineItems(msg.pipeline);
         const previousBypass = !!audioManager.masterBypass;
         const ok = await pipelineManager.presetManager.loadPreset({
             name: 'Remote',
@@ -272,5 +310,96 @@ class RemoteControl {
             throw new Error('unrecognized preset format');
         }
         return { name: msg.name, pipeline };
+    }
+    // Same storage and format as the preset dialog's save ({ plugins: [short items] }),
+    // but with the pipeline supplied by the client instead of the live one.
+    async opSavePreset(msg) {
+        const { pipelineManager } = this.requireApp();
+        const presetManager = pipelineManager.presetManager;
+        if (presetManager.externalHost) throw new Error('preset storage unavailable');
+        const name = typeof msg.name === 'string' ? msg.name.trim() : '';
+        if (!name) throw new Error('name must be a non-empty string');
+        if (name.length > MAX_PRESET_NAME_LENGTH) throw new Error('name too long');
+        if (FORBIDDEN_PRESET_NAMES.has(name)) throw new Error('invalid preset name');
+        const items = this.validatePipelineItems(msg.pipeline);
+        const plugins = JSON.parse(JSON.stringify(items));
+        await presetManager.enqueuePresetMutation(async () => {
+            const presets = await presetManager.getPresets({ strict: true });
+            Object.defineProperty(presets, name, {
+                value: { plugins }, enumerable: true, configurable: true, writable: true
+            });
+            await presetManager.persistPresets(presets);
+        });
+        try {
+            const revision = ++presetManager.presetMutationAttemptRevision;
+            await presetManager.refreshPresetConsumers?.(revision);
+        } catch (error) {
+            console.warn('[remote] preset list refresh failed:', error);
+        }
+        return {};
+    }
+
+    async irLibrary() {
+        if (this.win.irLibraryService) return this.win.irLibraryService;
+        const module = await import('../ir-library/service.js');
+        return module.getDefaultIrLibraryService();
+    }
+
+    // Single-file entries only: a true-stereo pair is two files with a combined id.
+    async opListIRs() {
+        const service = await this.irLibrary();
+        const items = service.list()
+            .filter(entry => entry.composition === 'single' && entry.originals?.length === 1)
+            .map(entry => {
+                const original = entry.originals[0];
+                return {
+                    id: entry.irId,
+                    name: original.fileName,
+                    bytes: original.byteLength,
+                    ext: extensionOf(original.fileName) || extensionOf(original.storageName) || 'bin',
+                    channels: entry.channels,
+                    sampleRate: entry.sampleRate,
+                    frames: entry.frames
+                };
+            });
+        return { items };
+    }
+
+    async opGetIR(msg) {
+        if (typeof msg.id !== 'string' || !IR_ID_PATTERN.test(msg.id)) throw new Error('invalid id');
+        const service = await this.irLibrary();
+        const entry = service.get(msg.id);
+        if (!entry) throw new Error('ir not found: ' + msg.id);
+        if (entry.composition !== 'single') throw new Error('pair entries are not supported');
+        const bytes = await service.store.readOriginal(msg.id, 'single');
+        if (!bytes) throw new Error('ir unreadable');
+        const original = entry.originals[0];
+        return {
+            data: bytes,
+            name: original.fileName,
+            ext: extensionOf(original.fileName) || extensionOf(original.storageName) || 'bin'
+        };
+    }
+
+    // Imports through the same service call as the library's "Import files" button.
+    async opPutIR(msg) {
+        if (typeof msg.id !== 'string' || !IR_ID_PATTERN.test(msg.id)) throw new Error('invalid id');
+        const bytes = msg.data;
+        if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) throw new Error('missing data');
+        const identity = await identifySingleIr(bytes);
+        if (identity.irId !== msg.id) throw new Error('id mismatch: data hashes to ' + identity.irId);
+        const ext = String(msg.ext || '').toLowerCase();
+        const baseName = String(msg.name || '').trim() || msg.id;
+        const fileName = extensionOf(baseName) === ext ? baseName : `${baseName}.${ext}`;
+        if (!isSupportedIrFileName(fileName)) throw new Error('unsupported file type: ' + ext);
+        const service = await this.irLibrary();
+        const file = new File([bytes], fileName);
+        const result = await service.importFiles([file]);
+        const entry = result.imported.find(candidate => candidate.irId === msg.id);
+        if (!entry) {
+            const codes = result.failureCodes?.length ? ' (' + result.failureCodes.join(', ') + ')' : '';
+            throw new Error('import failed' + codes);
+        }
+        return {};
     }
 }

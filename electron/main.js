@@ -1393,19 +1393,20 @@ async function initializeApp() {
     getMainWindow: () => constants.getMainWindow()
   });
 
-  // PoC LAN remote control (remote-v1). IPC is always registered so the renderer
-  // can ask; the server only starts with EFFETUNE_REMOTE=1 or --remote.
+  // PoC LAN remote control (remote-v1). IPC is always registered; the server
+  // runs while Settings > Remote Control is on (or EFFETUNE_REMOTE=1 / --remote).
   remoteControlHost = new RemoteControlHost({
     app,
     getMainWindow: () => constants.getMainWindow(),
+    config: configModule,
     log: (...args) => console.log(...args)
   });
   disposeRemoteControlIpc = registerRemoteControlIpc({
     ipcMain,
-    getHost: () => (remoteControlHost && remoteControlHost.enabled ? remoteControlHost : null),
+    getHost: () => remoteControlHost,
     getMainWindow: () => constants.getMainWindow()
   });
-  remoteControlHost.start();
+  void remoteControlHost.start();
 
   // Every normal launch uses a sacrificial audio-only renderer. Auto-restarts
   // skip it so their startup-grace clock is not reset by a second navigation.

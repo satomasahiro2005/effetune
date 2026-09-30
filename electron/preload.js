@@ -174,7 +174,8 @@ const remoteV1 = Object.freeze({
   rendererUnavailable: () => ipcRenderer.invoke('remote-v1:renderer-unavailable', {}),
   respond: response => ipcRenderer.invoke('remote-v1:response', response),
   publishState: snapshot => ipcRenderer.invoke('remote-v1:state', snapshot),
-  onRequest: callback => addSingleArgIpcListener('remote-v1:request', callback)
+  onRequest: callback => addSingleArgIpcListener('remote-v1:request', callback),
+  onStatus: callback => addSingleArgIpcListener('remote-v1:status', callback)
 });
 
 function withoutOpenHomeOwnedConfig(config) {
@@ -183,6 +184,9 @@ function withoutOpenHomeOwnedConfig(config) {
     openHomeRemoteControl: _openHomeRemoteControl,
     openHomeDeviceId: _openHomeDeviceId,
     openHomeFriendlyName: _openHomeFriendlyName,
+    // Owned by the remote-control host in main (Settings > Remote Control).
+    remoteControlEnabled: _remoteControlEnabled,
+    remoteControlToken: _remoteControlToken,
     ...rendererOwnedConfig
   } = config;
   return rendererOwnedConfig;
