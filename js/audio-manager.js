@@ -1923,7 +1923,15 @@ export class AudioManager {
         this._finalizeParallelDspBarrier(barrier, [], 'js');
     }
 
+    // Remote control analyzer mirror (js/remote/remote-telemetry.js).
+    setRemoteTelemetryDemand(on) {
+        this.remoteTelemetryDemand = !!on;
+        this.powerPolicyController?.setRemoteTelemetryDemand?.(this.remoteTelemetryDemand);
+        this.updateDspTelemetryRate();
+    }
+
     getDspTelemetryRate(state = null) {
+        if (this.remoteTelemetryDemand) return 60;
         if (this.visualizerSources?.length > 0) return 60;
         const controller = this.powerPolicyController;
         const hidden = typeof state?.hidden === 'boolean'

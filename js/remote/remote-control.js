@@ -10,6 +10,7 @@ import {
 import { identifySingleIr } from '../ir-library/ir-library-id.js';
 import { isSupportedIrFileName } from '../ir-library/audio-header-metadata.js';
 import { initRemoteControlButton } from './remote-control-button.js';
+import { RemoteTelemetry } from './remote-telemetry.js';
 
 const STATE_MIN_INTERVAL_MS = 100;
 const SAFETY_POLL_MS = 1000;
@@ -45,6 +46,8 @@ class RemoteControl {
         this.historyTimer = null;
         this.disposeRequestListener = null;
         this.disposeStatusListener = null;
+        this.telemetry = null;
+        this.disposeTelemetryControl = null;
         // Snapshots are only published while the server in main is running.
         this.active = false;
     }
@@ -53,6 +56,10 @@ class RemoteControl {
         this.disposeRequestListener = this.api.onRequest(request => {
             void this.handleRequest(request);
         });
+        // Analyzer mirror: main switches it on while a client is subscribed (and
+        // repeats the demand after renderer-ready, so listen before that).
+        this.telemetry = new RemoteTelemetry(this.win, this.api);
+        this.disposeTelemetryControl = this.api.onTelemetryControl?.(c => this.telemetry.setControl(c)) || null;
         let status;
         try {
             status = await this.api.rendererReady();
@@ -63,6 +70,9 @@ class RemoteControl {
         if (!status || typeof status !== 'object') {
             this.disposeRequestListener?.();
             this.disposeRequestListener = null;
+            this.disposeTelemetryControl?.();
+            this.disposeTelemetryControl = null;
+            this.telemetry.setControl({ on: false });
             return false;
         }
         // The server can be switched on and off at runtime (Settings > Remote Control).
@@ -80,6 +90,7 @@ class RemoteControl {
     setActive(active) {
         const wasActive = this.active;
         this.active = active;
+        if (!active) this.telemetry?.setControl({ on: false });
         if (active && !wasActive) {
             // The host dropped its snapshot; publish a fresh one.
             this.lastSentJson = null;
@@ -225,7 +236,7 @@ class RemoteControl {
         const items = this.validatePipelineItems(msg.pipeline);
         const previousBypass = !!audioManager.masterBypass;
         const ok = await pipelineManager.presetManager.loadPreset({
-            name: 'Remote',
+            name: 'Remote Control',
             plugins: items.map(item => ({ ...item }))
         });
         if (ok === false) throw new Error('chain rejected by preset loader');

@@ -196,6 +196,14 @@ async function waitLog(file, re, ms = 90000) {
 
 let child = null;
 let dummy = null;
+{
+  // Host-side push caps, without Electron.
+  const r = spawnSync(process.execPath, ['tools/remote-test-telemetry-caps.mjs'], { cwd: root, encoding: 'utf8' });
+  const out = (r.stdout || '') + (r.stderr || '');
+  fs.writeFileSync(path.join(logDir, 'telemetry-caps.log'), out);
+  process.stdout.write(out.split('\n').filter((l) => /^(CHECK|SUMMARY)/.test(l)).join('\n') + '\n');
+  check('telemetry push caps (see telemetry-caps.log)', r.status === 0);
+}
 try {
   // ---- phase 1: forced on (env), full protocol test, then the panel ----------
   child = launch('forced', { forced: true });
@@ -205,23 +213,26 @@ try {
   let clientExit = 1;
   for (let attempt = 1; attempt <= 12; attempt++) {
     const r = spawnSync(process.execPath, ['tools/remote-test-client.mjs', `127.0.0.1:${port}/${token}`], {
-      cwd: root, encoding: 'utf8', env: { ...process.env, REMOTE_TEST_CDP: String(cdpPort) }, maxBuffer: 256 * 1024 * 1024
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, REMOTE_TEST_CDP: String(cdpPort), REMOTE_TEST_INSPECT: String(inspectPort) },
+      maxBuffer: 256 * 1024 * 1024
     });
     const out = (r.stdout || '') + (r.stderr || '');
     fs.writeFileSync(clientLog, out);
-    process.stdout.write(out.split('\n').filter((l) => /^(CHECK|SUMMARY|FAILED|VERIFIED|ERROR|NOTE)/.test(l)).join('\n') + '\n');
+    process.stdout.write(out.split('\n').filter((l) => /^(CHECK|SUMMARY|FAILED|VERIFIED|ERROR|NOTE|MEASURE)/.test(l)).join('\n') + '\n');
     clientExit = r.status ?? 1;
     if (clientExit === 0 || !/renderer-unavailable|timeout|ECONNREFUSED|CDP target not found/.test(out)) break;
     console.log(`attempt ${attempt} failed early (renderer not ready?), retrying in 4s`);
     await sleep(4000);
   }
   check('protocol client (see client-run.log)', clientExit === 0);
+  if (process.env.REMOTE_TEST_ONLY) throw new Error('stop'); // quick run: client only
 
   if (process.platform === 'win32') {
     const ps = spawnSync('powershell', ['-NoProfile', '-Command',
       `(Get-Process -Id ${child.pid}).MainWindowTitle`], { encoding: 'utf8' });
     const title = (ps.stdout || '').trim();
-    check('window title carries the connect string', new RegExp(` Remote \\d+\\.\\d+\\.\\d+\\.\\d+:${port}/${token}`).test(title), title);
+    check('window title carries the connect string', new RegExp(` Remote Control \\d+\\.\\d+\\.\\d+\\.\\d+:${port}/${token}`).test(title), title);
   }
 
   const { opened, panel } = await openPanel();
@@ -345,7 +356,7 @@ try {
     /port 47310 is in use \(attempt 4\/4\)/.test(busyText) && busyText.includes(`using ${fallbackPort} instead`));
   const busyTitle = windowTitle(child);
   check('busy port: window title advertises the bound port',
-    process.platform !== 'win32' || new RegExp(` Remote \\d+\\.\\d+\\.\\d+\\.\\d+:${fallbackPort}/${token}`).test(busyTitle), busyTitle);
+    process.platform !== 'win32' || new RegExp(` Remote Control \\d+\\.\\d+\\.\\d+\\.\\d+:${fallbackPort}/${token}`).test(busyTitle), busyTitle);
   const busyPanel = await openPanel();
   const busyStatus = await busyPanel.panel.evaluate('remotePanel.getStatus()');
   check('busy port: pairing URL, connect string and status use the bound port',
@@ -376,8 +387,10 @@ try {
   check('retry: no fallback was used', !(await portOpen(fallbackPort)));
   await stop(child);
 } catch (error) {
-  console.log('RUN ERROR:', error.stack || error.message);
-  check('run completed', false, error.message);
+  if (!(process.env.REMOTE_TEST_ONLY && error.message === 'stop')) {
+    console.log('RUN ERROR:', error.stack || error.message);
+    check('run completed', false, error.message);
+  }
 } finally {
   started.forEach(killTree);
   try { dummy?.close(); } catch (_) { /* ignore */ }

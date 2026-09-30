@@ -85,7 +85,7 @@ requests that also return data, the ack comes first and the data message carries
 
 | Request | Effect |
 |---|---|
-| `{"op":"hello","v":1}` | Replies with `state`, which also carries `"features":["origin","savePreset","irSync"]`. Any other `v` is rejected. Extra fields (such as `"app"`) are ignored. |
+| `{"op":"hello","v":1}` | Replies with `state`, which also carries `"features":["origin","savePreset","irSync","telemetry"]`. Any other `v` is rejected. Extra fields (such as `"app"`) are ignored. |
 | `{"op":"get"}` | Replies with `state`. |
 | `{"op":"chain","pipeline":[...]}` | Replaces the whole pipeline (at most 256 items). If any `nm` is unknown, the request fails and nothing changes. Master bypass keeps its state. |
 | `{"op":"params","index":i,"params":{...}}` | Applies the keys to stage `i` (0-based) of the current pipeline. Keys that are not given stay as they are. |
@@ -96,6 +96,7 @@ requests that also return data, the ack comes first and the data message carries
 | `{"op":"listIRs"}` | Replies `{"op":"irs","items":[{"id","name","bytes","ext","channels","sampleRate","frames"}]}`. |
 | `{"op":"getIR","id":"..."}` | Sends the IR file (see IR transfer). Unknown id: `ok:false`. |
 | `{"op":"putIR", ...}` | Uploads an IR file into the library (see IR transfer). |
+| `{"op":"telemetry","on":true,"fps":15}` | Subscribes this connection to the analyzer mirror (see Telemetry); `"on":false` ends it. `fps` is optional (default 15, clamped to 1..30); a non-number is rejected with `invalid fps`. A repeat call replaces the previous setting. The subscription ends when the socket closes. |
 
 ## Pushes (app → client)
 
@@ -122,6 +123,48 @@ the computer by applying every push that does not carry one of its own `seq` val
 Replies to `hello` and `get` carry the request's `seq` and `"origin":"remote"`. They are
 snapshots, not echoes of an edit: always apply them. A command that leaves the pipeline as it
 was produces no push, so do not wait for one to confirm a command; the ack does that.
+
+### Telemetry
+
+While a connection is subscribed with `{"op":"telemetry","on":true}`, the app pushes the
+readings of its Analyzer stages (Level Meter, Oscilloscope, Spectrum Analyzer, Spectrogram,
+Stereo Meter, Chroma Spiral, Note Spectrogram, Pitch Meter) in the active pipeline:
+
+```json
+{"op":"telemetry","frames":[
+  {"index":3,"nm":"Spectrum Analyzer","type":4,"data":"<base64>"},
+  {"index":5,"nm":"Level Meter","type":1,"data":"<base64>"}]}
+```
+
+- At most `fps` pushes per second, never with an empty `frames` array, and without `seq`.
+- `index`: the stage's 0-based position in the pipeline when the push was built (the same
+  index as `params.index` and `state.pipeline`). `nm`: its display name, as in `state`.
+- `type`: the frame type, copied from the header as a hint; the header is authoritative.
+- `data`: base64 of one DSP telemetry frame, exactly `16 + payloadBytes` bytes, no padding.
+  All fields are little-endian:
+
+  | Offset | Field |
+  |---|---|
+  | 0 | u16 frameType |
+  | 2 | u16 formatVersion |
+  | 4 | u32 tapId (the app's internal id; ignore or overwrite it) |
+  | 8 | u32 sequence |
+  | 12 | u16 payloadBytes |
+  | 14 | u16 flags (bit 0: the app dropped frames before this one) |
+  | 16 | payload (the layout of `dsp/core/telemetry.cpp` and `js/audio/telemetry-hub.js`) |
+
+  Frame types: Level Meter 1 (v1), Oscilloscope 3 (v2), Spectrum Analyzer 4 (v1, v2 in HQ
+  mode), Chroma Spiral 4 (v2), Spectrogram 5 (v1, v2 in HQ mode), Stereo Meter 6 (v2), Note
+  Spectrogram 24 (v3), Pitch Meter 26 (v1). Check `formatVersion` before reading a payload.
+- Only the latest frame per stage and type is sent; older ones are dropped, not queued.
+  Scrolling displays (Spectrogram, Note Spectrogram, Stereo Meter) therefore get one column
+  per push; use `sequence` to skip a frame already seen.
+- A push holds at most 64 frames and 1 MiB of raw frame bytes. Frames that did not fit go
+  first in the next push (still latest only). A connection whose send buffer holds more
+  than 512 KiB skips pushes until it drains.
+- Nothing is sent while the app is in master bypass, idle or suspended, or for a disabled
+  analyzer. While any client is subscribed the app keeps its analyzers running even when
+  its window is hidden or minimized.
 
 ## IR transfer
 
@@ -170,7 +213,6 @@ L/R) has a combined id and is left out.
   parameters as given. IR Reverb finds its file by id, so upload the IR before sending a chain
   that uses it; an IR Reverb that is already showing "IR not found" does not pick up a later
   upload by itself.
-- Meters and analyzers (Level Meter, spectrum displays, the Pipeline Analyzer) send nothing
-  over this API.
+- Only Analyzer stages are mirrored; per-effect meters (GR bars etc.) and the Pipeline Analyzer are not.
 - The IR library window does not refresh while it is open when an IR arrives.
 - No discovery (mDNS). Pair with the QR code or enter the address by hand.

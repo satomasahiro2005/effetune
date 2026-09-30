@@ -177,7 +177,10 @@ const remoteV1 = Object.freeze({
   openPanel: () => ipcRenderer.invoke('remote-v1:open-panel', {}),
   getStatus: () => ipcRenderer.invoke('remote-v1:get-status', {}),
   onRequest: callback => addSingleArgIpcListener('remote-v1:request', callback),
-  onStatus: callback => addSingleArgIpcListener('remote-v1:status', callback)
+  onStatus: callback => addSingleArgIpcListener('remote-v1:status', callback),
+  // Analyzer mirror: fire-and-forget, up to 30 times a second.
+  publishTelemetry: frames => ipcRenderer.send('remote-v1:telemetry', frames),
+  onTelemetryControl: callback => addSingleArgIpcListener('remote-v1:telemetry-control', callback)
 });
 
 function withoutOpenHomeOwnedConfig(config) {

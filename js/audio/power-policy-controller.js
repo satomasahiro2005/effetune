@@ -223,6 +223,14 @@ export class PowerPolicyController {
         this.displayDspBypassInitialized = false;
         this.displayDspHiddenInitialized = false;
         this.dspUiSuppressionReasons = new Set();
+        // A remote-control client mirrors the analyzers: keep display DSP and
+        // UI telemetry running while the window is hidden.
+        this.remoteTelemetryDemand = false;
+    }
+
+    setRemoteTelemetryDemand(on) {
+        this.remoteTelemetryDemand = on === true;
+        this._setUiPowerGate(this.effectiveState, this.processingDirective);
     }
 
     isControllerEnabled() {
@@ -1891,13 +1899,14 @@ export class PowerPolicyController {
             this.currentPowerTopologySnapshot
         );
         const physicalOutputSuppressed = this.audioManager.masterBypass === true || structuralZero;
-        const displayDspHidden = hidden || this.dspUiSuppressionReasons.size !== 0;
+        const hiddenForDisplay = hidden && !this.remoteTelemetryDemand;
+        const displayDspHidden = hiddenForDisplay || this.dspUiSuppressionReasons.size !== 0;
         const displayDspBypassed = this.settings.skipDisplayDspWhenHidden === true &&
             displayDspHidden;
         const dspUiEnabled = state === AudioPowerState.ACTIVE &&
             directive !== ProcessingDirective.BYPASS_TRANSPORT &&
             directive !== ProcessingDirective.ZERO_OUTPUT_TRANSPORT &&
-            !physicalOutputSuppressed && !hidden && this.dspUiSuppressionReasons.size === 0;
+            !physicalOutputSuppressed && !hiddenForDisplay && this.dspUiSuppressionReasons.size === 0;
         const coordinator = this._getTokensAndGuards();
         const playerUiEnabled = state !== AudioPowerState.SUSPENDED && !hidden;
         const dspGateChanged = !this.uiPowerGateInitialized ||

@@ -131,6 +131,9 @@ export class TelemetryHub {
         this.visualSyncTimer = null;
         this.subscribers = new Map();
         this.sources = new Map();
+        // Remote control mirror (js/remote/remote-telemetry.js); sees every
+        // delivered frame and must copy what it keeps synchronously.
+        this.mirrorListener = null;
         this.stats = {
             packets: 0,
             frames: 0,
@@ -141,6 +144,10 @@ export class TelemetryHub {
             returnErrors: 0,
             visualSyncDropped: 0
         };
+    }
+
+    setMirrorListener(fn) {
+        this.mirrorListener = typeof fn === 'function' ? fn : null;
     }
 
     setPort(port) {
@@ -264,6 +271,7 @@ export class TelemetryHub {
             (frame.frameType === TelemetryFrameType.TAP_SPECTRUM ||
                 frame.frameType === TelemetryFrameType.TAP_SPECTROGRAM_COL);
         if (highQuality && sourcePort !== this.port) return;
+        if (this.mirrorListener) { try { this.mirrorListener(frame); } catch (_) { /* never break display */ } }
         this.stats.frames += 1;
         if ((frame.flags & 1) !== 0) this.stats.framesWithDropFlag += 1;
         const callbacks = this.subscribers.get(this._key(frame.tapId, frame.frameType));

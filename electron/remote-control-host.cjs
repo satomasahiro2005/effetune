@@ -28,7 +28,9 @@ const CHANNELS = Object.freeze({
   openPanel: 'remote-v1:open-panel',
   request: 'remote-v1:request',
   status: 'remote-v1:status',
-  getStatus: 'remote-v1:get-status'
+  getStatus: 'remote-v1:get-status',
+  telemetry: 'remote-v1:telemetry',
+  telemetryControl: 'remote-v1:telemetry-control'
 });
 
 const PANEL_CHANNELS = Object.freeze({
@@ -61,11 +63,17 @@ const MAX_UPLOADS_PER_CLIENT = 2;
 const SEND_HIGH_WATER_BYTES = 8 * 1024 * 1024;
 const IR_ID_PATTERN = /^[a-f0-9]{24}$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
-const FEATURES = Object.freeze(['origin', 'savePreset', 'irSync']);
+const FEATURES = Object.freeze(['origin', 'savePreset', 'irSync', 'telemetry']);
 const CLIENT_OPS = new Set([
   'hello', 'get', 'chain', 'params', 'bypass', 'listPresets', 'getPreset',
-  'savePreset', 'listIRs', 'getIR', 'putIR'
+  'savePreset', 'listIRs', 'getIR', 'putIR', 'telemetry'
 ]);
+// Analyzer mirror (op "telemetry"): latest frame per stage and type, per client.
+const TELEMETRY_DEFAULT_FPS = 15;
+const TELEMETRY_MAX_FPS = 30;
+const TELEMETRY_MAX_FRAMES = 64;
+const TELEMETRY_MAX_RAW_BYTES = 1 << 20;
+const TELEMETRY_HIGH_WATER = 512 * 1024;
 const MUTATING_OPS = new Set(['chain', 'params', 'bypass']);
 
 let activeHost = null;
@@ -186,6 +194,7 @@ class RemoteControlHost {
     this.panelWindow = null;
     this.disposed = false;
     this.toggleQueue = Promise.resolve();
+    this.telemetryDemandJson = null; // last { on, fps } sent to the renderer
     activeHost = this;
   }
 
@@ -449,6 +458,10 @@ class RemoteControlHost {
     clearTimeout(this.broadcastTimer);
     this.broadcastTimer = null;
     this.pendingOrigin = null;
+    if (wss) {
+      for (const ws of wss.clients) this.clearTelemetry(ws);
+    }
+    this.sendTelemetryDemand({ on: false, fps: 0 });
     const wasRunning = !!this.connectString;
     this.connectString = null;
     // A failed listen is not an error once the switch is off.
@@ -474,8 +487,8 @@ class RemoteControlHost {
   }
 
   decorateTitle(title) {
-    const base = String(title || 'EffeTune').replace(/ — Remote .*$/, '');
-    return this.connectString ? `${base} — Remote ${this.connectString}` : base;
+    const base = String(title || 'EffeTune').replace(/ — Remote( Control)? .*$/, '');
+    return this.connectString ? `${base} — Remote Control ${this.connectString}` : base;
   }
 
   refreshTitle() {
@@ -534,6 +547,10 @@ class RemoteControlHost {
   setRendererReady() {
     this.rendererReady = true;
     for (const waiter of [...this.readyWaiters]) waiter(true);
+    // A reloaded renderer starts without a subscription; send the demand again
+    // once it has had a chance to install its listener.
+    this.telemetryDemandJson = null;
+    setImmediate(() => this.updateTelemetryDemand());
     return { apiVersion: 1, ...this.getBriefStatus() };
   }
 
@@ -726,12 +743,15 @@ class RemoteControlHost {
     ws.authenticated = true;
     ws.isAlive = true;
     ws.uploads = new Map();
+    ws.telemetry = null;
     this.log(`[remote] client connected: ${req.socket.remoteAddress}`);
     this.emitStatus();
     ws.on('pong', () => { ws.isAlive = true; });
     ws.on('error', () => {});
     ws.on('close', () => {
       ws.uploads.clear();
+      this.clearTelemetry(ws);
+      this.updateTelemetryDemand();
       this.log(`[remote] client disconnected: ${req.socket.remoteAddress}`);
       this.emitStatus();
     });
@@ -774,6 +794,10 @@ class RemoteControlHost {
       this.ack(ws, seq, false, `unsupported-version: ${String(msg.v).slice(0, 16)}`);
       return;
     }
+    if (op === 'telemetry') {
+      this.onTelemetry(ws, msg, seq);
+      return;
+    }
     if (op === 'putIR') {
       await this.onPutIrChunk(ws, msg, seq);
       return;
@@ -812,6 +836,146 @@ class RemoteControlHost {
       default:
         break;
     }
+  }
+
+  // ---- analyzer mirror ---------------------------------------------------
+
+  onTelemetry(ws, msg, seq) {
+    if (typeof msg.on !== 'boolean') {
+      this.ack(ws, seq, false, 'on must be boolean');
+      return;
+    }
+    let fps = TELEMETRY_DEFAULT_FPS;
+    if (msg.fps !== undefined) {
+      if (typeof msg.fps !== 'number' || !Number.isFinite(msg.fps)) {
+        this.ack(ws, seq, false, 'invalid fps');
+        return;
+      }
+      fps = Math.min(TELEMETRY_MAX_FPS, Math.max(1, Math.round(msg.fps)));
+    }
+    this.clearTelemetry(ws);
+    if (msg.on) {
+      ws.telemetry = {
+        fps,
+        period: 1000 / fps,
+        nextAt: 0,      // earliest time of the next push (schedule, not last send + period)
+        timer: null,
+        pending: new Map(),
+        carry: new Set()
+      };
+    }
+    this.ack(ws, seq, true);
+    this.updateTelemetryDemand();
+  }
+
+  clearTelemetry(ws) {
+    if (!ws.telemetry) return;
+    clearTimeout(ws.telemetry.timer);
+    ws.telemetry = null;
+  }
+
+  updateTelemetryDemand() {
+    let maxFps = 0;
+    if (this.wss && this.connectString) {
+      for (const ws of this.wss.clients) {
+        if (ws.authenticated && ws.telemetry && ws.readyState === 1) {
+          maxFps = Math.max(maxFps, ws.telemetry.fps);
+        }
+      }
+    }
+    this.sendTelemetryDemand({ on: maxFps > 0, fps: maxFps });
+  }
+
+  sendTelemetryDemand(demand) {
+    const json = JSON.stringify(demand);
+    if (json === this.telemetryDemandJson) return;
+    const win = this.getMainWindow();
+    if (!this.rendererReady || !win?.webContents || win.isDestroyed?.()) {
+      // Sent again from setRendererReady().
+      this.telemetryDemandJson = null;
+      return;
+    }
+    try {
+      win.webContents.send(CHANNELS.telemetryControl, demand);
+      this.telemetryDemandJson = json;
+      this.log(`[remote] analyzer mirror ${demand.on ? `on at ${demand.fps} fps` : 'off'}`);
+    } catch (_) {
+      this.telemetryDemandJson = null;
+    }
+  }
+
+  // frames: [{ key, index, nm, type, bytes: Uint8Array }], latest per key.
+  handleRendererTelemetry(frames) {
+    if (!Array.isArray(frames) || !this.wss) return false;
+    for (const ws of this.wss.clients) {
+      const sub = ws.telemetry;
+      if (!sub) continue;
+      for (const f of frames) {
+        if (!f || typeof f.key !== 'string' || !(f.bytes instanceof Uint8Array)) continue;
+        if (!Number.isInteger(f.index) || typeof f.nm !== 'string') continue;
+        sub.pending.set(f.key, f); // newer overwrites older
+      }
+      this.pumpTelemetry(ws);
+    }
+    return true;
+  }
+
+  // Sends a push as soon as this client's rate allows. Pushes follow a fixed
+  // schedule of 1/fps (a plain setInterval runs slow on Windows' 15.6 ms timer
+  // grain: 15 fps came out at 13/s and 30 fps at 21/s), with a quarter period
+  // of slack for renderer jitter; the schedule never runs ahead.
+  pumpTelemetry(ws) {
+    const sub = ws.telemetry;
+    if (!sub || sub.timer || sub.pending.size === 0 || ws.readyState !== 1) return;
+    const later = delay => {
+      sub.timer = setTimeout(() => {
+        sub.timer = null;
+        if (ws.telemetry === sub) this.pumpTelemetry(ws);
+      }, Math.max(1, delay));
+    };
+    const now = Date.now();
+    const wait = sub.nextAt - sub.period / 4 - now;
+    if (wait > 0) { later(wait); return; }
+    if (ws.bufferedAmount > TELEMETRY_HIGH_WATER) { later(sub.period); return; }
+    if (!this.flushTelemetry(ws)) return;
+    sub.nextAt = Math.max(sub.nextAt + sub.period, now + sub.period);
+    if (sub.pending.size > 0) this.pumpTelemetry(ws); // left over by the caps
+  }
+
+  // Sends one push (within the caps) of what is pending. Returns true if sent.
+  flushTelemetry(ws) {
+    const sub = ws.telemetry;
+    if (!sub || sub.pending.size === 0) return false;
+    if (ws.readyState !== 1 || ws.bufferedAmount > TELEMETRY_HIGH_WATER) return false;
+    // Entries left over by the caps last time go first, then the rest, each in
+    // stage order.
+    const byIndex = (a, b) => a[1].index - b[1].index;
+    const entries = [...sub.pending.entries()];
+    const ordered = [
+      ...entries.filter(([key]) => sub.carry.has(key)).sort(byIndex),
+      ...entries.filter(([key]) => !sub.carry.has(key)).sort(byIndex)
+    ];
+    const taken = [];
+    let raw = 0;
+    for (const [key, f] of ordered) {
+      if (taken.length >= TELEMETRY_MAX_FRAMES) break;
+      if (raw + f.bytes.byteLength > TELEMETRY_MAX_RAW_BYTES) break;
+      raw += f.bytes.byteLength;
+      taken.push(f);
+      sub.pending.delete(key);
+    }
+    sub.carry = new Set(sub.pending.keys());
+    if (taken.length === 0) return false;
+    this.send(ws, {
+      op: 'telemetry',
+      frames: taken.map(f => ({
+        index: f.index,
+        nm: f.nm,
+        type: f.type,
+        data: Buffer.from(f.bytes.buffer, f.bytes.byteOffset, f.bytes.byteLength).toString('base64')
+      }))
+    });
+    return true;
   }
 
   // ---- IR transfer -------------------------------------------------------
@@ -954,6 +1118,13 @@ function registerRemoteControlIpc({ ipcMain, getHost, getMainWindow }) {
       return host.getStatus({ withQr: true });
     }]
   ]);
+  // Analyzer frames come by send (fire-and-forget, up to 30 Hz), not invoke.
+  const onTelemetry = (event, frames) => {
+    const window = getMainWindow();
+    if (!window?.webContents || event.sender !== window.webContents) return;
+    getHost()?.handleRendererTelemetry(frames);
+  };
+  ipcMain.on(CHANNELS.telemetry, onTelemetry);
   for (const [channel, handler] of panelHandlers) {
     ipcMain.handle(channel, (event, ...args) => {
       const host = getHost();
@@ -964,6 +1135,7 @@ function registerRemoteControlIpc({ ipcMain, getHost, getMainWindow }) {
   return () => {
     for (const channel of handlers.keys()) ipcMain.removeHandler(channel);
     for (const channel of panelHandlers.keys()) ipcMain.removeHandler(channel);
+    ipcMain.removeListener(CHANNELS.telemetry, onTelemetry);
   };
 }
 
