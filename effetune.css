@@ -973,7 +973,7 @@ body.layout-mobile #pipelineStats {
 }
 
 /* On (listening or connected) looks like the app's other "on" buttons
-   (.tab-button.active, .player-button[data-active="true"]): filled with the accent. */
+   (the selected tab, the active player buttons): filled with the accent. */
 .remote-control-button[data-state="listening"],
 .remote-control-button[data-state="connected"] {
     background: linear-gradient(180deg, color-mix(in srgb, var(--et-accent) 95%, transparent), var(--et-accent-pressed));
