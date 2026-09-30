@@ -152,6 +152,41 @@ check('renderer-ready resends the current demand', controls.length === n + 1 && 
 host.clearTelemetry(a);
 host.clearTelemetry(b);
 
+// 5b) PEQ overlay frames (role before/after): only to clients that asked with overlays:true.
+{
+  const role = (index, r, sequence) => ({ ...frame(index, 4, 16404, sequence), key: `ov:${2000 + index}:${r}`, role: r });
+  host.onTelemetry(a, { op: 'telemetry', on: true, fps: 15, overlays: 'yes' }, 20);
+  check('overlays: non-boolean rejected with "overlays must be boolean"',
+    a.out.at(-1)?.ok === false && a.out.at(-1).error === 'overlays must be boolean', JSON.stringify(a.out.at(-1)));
+  host.onTelemetry(a, { op: 'telemetry', on: true, fps: 15, overlays: true }, 21);
+  host.onTelemetry(b, { op: 'telemetry', on: true, fps: 10 }, 22);
+  check('overlays: demand carries overlays:true while one client asks for them',
+    controls.at(-1)?.overlays === true && controls.at(-1).on === true, JSON.stringify(controls.at(-1)));
+  a.out.length = 0;
+  b.out.length = 0;
+  host.handleRendererTelemetry([frame(0, 1, 16, 50), role(1, 'before', 1), role(1, 'after', 1), role(2, 'sideways', 1)]);
+  host.flushTelemetry(a);
+  host.flushTelemetry(b);
+  const pa = a.out.at(-1)?.frames || [];
+  const pb = b.out.at(-1)?.frames || [];
+  check('overlays: subscriber gets before + after with role, analyzer frame without role; bad role dropped',
+    pa.length === 3 && pa.filter((f) => f.role === 'before').length === 1 && pa.filter((f) => f.role === 'after').length === 1 &&
+    pa.filter((f) => f.role === undefined && f.type === 1).length === 1 &&
+    Buffer.from(pa.find((f) => f.role === 'after').data, 'base64').length === 16420,
+    JSON.stringify(pa.map((f) => [f.index, f.type, f.role])));
+  check('overlays: a client without overlays gets only the analyzer frame',
+    pb.length === 1 && pb[0].role === undefined && pb[0].type === 1, JSON.stringify(pb.map((f) => [f.index, f.type, f.role])));
+  host.onTelemetry(a, { op: 'telemetry', on: true, fps: 15 }, 23);
+  check('overlays: resubscribing without the flag drops overlays from the demand',
+    controls.at(-1)?.overlays === false && controls.at(-1).on === true, JSON.stringify(controls.at(-1)));
+  host.onTelemetry(a, { op: 'telemetry', on: false, overlays: true }, 24);
+  host.onTelemetry(b, { op: 'telemetry', on: false }, 25);
+  check('overlays: flag without on:true has no effect', controls.at(-1)?.on === false && controls.at(-1).overlays === false,
+    JSON.stringify(controls.at(-1)));
+  host.clearTelemetry(a);
+  host.clearTelemetry(b);
+}
+
 // 6) rate: frames every ~5 ms for 3 s; the client asked for 30 and for 7 fps.
 host.pumpTelemetry = pump;
 for (const [fps, ws] of [[30, a], [7, b]]) {

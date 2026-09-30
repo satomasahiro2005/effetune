@@ -634,3 +634,90 @@ test('After-only spectrum tap adds at most 25 percent per-instance work and copi
     blockCount
   );
 });
+
+test('remote spectrum taps run beside the UI tap with their own state and message type', async () => {
+  const harness = await createHarness();
+  await setupFallback(harness, `
+    for (let index = 0; index < data.length; index++) data[index] *= 0.5;
+    return data;
+  `);
+  const remoteMessages = () => harness.posts.filter(({ message }) => message.type === 'remoteSpectrumOverlay');
+
+  await harness.send({ type: 'setSpectrumTap', pluginId: 7, enabled: true, mode: 'after' });
+  await harness.send({ type: 'setRemoteSpectrumTaps', pluginIds: [7, 42, 'x'] });
+  const remoteState = harness.processor.remoteSpectrumTaps.get(7);
+  assert.deepEqual([...harness.processor.remoteSpectrumTaps.keys()], [7, 42]);
+  assert.equal(remoteState.mode, 'compare');
+  assert.equal(remoteState.quality, 'normal');
+  assert.notEqual(remoteState, harness.processor.spectrumTapState.get(7));
+  assert.equal(harness.processor.isSpectrumTapRoutingActive(), true);
+
+  // Idempotent: the same set keeps the existing state.
+  await harness.send({ type: 'setRemoteSpectrumTaps', pluginIds: [7] });
+  assert.equal(harness.processor.remoteSpectrumTaps.get(7), remoteState);
+  assert.deepEqual([...harness.processor.remoteSpectrumTaps.keys()], [7]);
+
+  for (let block = 0; block < 32; block++) harness.process(sineBlock(block * BLOCK_SIZE));
+  const ui = spectrumMessages(harness);
+  const remote = remoteMessages();
+  assert.equal(ui.length, 2);
+  assert.equal(remote.length, 2);
+  assert.equal(ui.every(({ message }) => message.mode === 'after' && !('inputBuffer' in message)), true);
+  assert.equal(remote.every(({ message, transfer }) =>
+    message.spectrumPluginId === 7 && message.mode === 'compare' && message.quality === 'normal' &&
+    message.inputBuffer instanceof Float32Array && message.outputBuffer instanceof Float32Array &&
+    transfer.length === 2 && transfer[0] === message.inputBuffer.buffer &&
+    transfer[1] === message.outputBuffer.buffer), true);
+  const last = remote.at(-1).message;
+  assert.deepEqual(remote.map(({ message }) => message.bufferPosition), [2048, 0]);
+  for (const index of [25, 1000, 4000]) {
+    const expected = Math.sin(2 * Math.PI * 1000 * index / 48000);
+    assert.ok(Math.abs(last.inputBuffer[index] - expected) < 1e-6);
+    assert.ok(Math.abs(last.outputBuffer[index] - 0.5 * expected) < 1e-6);
+  }
+  // Both taps capture the same output samples.
+  const uiLast = ui.at(-1).message;
+  assert.ok(uiLast.outputBuffer.every((value, index) => value === last.outputBuffer[index]));
+
+  // The UI overlay going off leaves the remote tap alive.
+  await harness.send({ type: 'setSpectrumTap', pluginId: 7, enabled: false });
+  assert.equal(harness.processor.remoteSpectrumTaps.get(7), remoteState);
+  harness.posts.length = 0;
+  for (let block = 0; block < 32; block++) harness.process(sineBlock(block * BLOCK_SIZE));
+  assert.equal(spectrumMessages(harness).length, 0);
+  assert.equal(remoteMessages().length, 2);
+
+  // And the UI tap is unaffected by the remote set.
+  await harness.send({ type: 'setSpectrumTap', pluginId: 7, enabled: true, mode: 'compare', quality: 'normal' });
+  await harness.send({ type: 'setRemoteSpectrumTaps', pluginIds: [] });
+  assert.equal(harness.processor.remoteSpectrumTaps.size, 0);
+  harness.posts.length = 0;
+  for (let block = 0; block < 32; block++) harness.process(sineBlock(block * BLOCK_SIZE));
+  assert.equal(remoteMessages().length, 0);
+  assert.equal(spectrumMessages(harness).length, 2);
+
+  // Reset clears the remote rings too; removed plugins are pruned.
+  await harness.send({ type: 'setRemoteSpectrumTaps', pluginIds: [7] });
+  const again = harness.processor.remoteSpectrumTaps.get(7);
+  for (let block = 0; block < 8; block++) harness.process(sineBlock(block * BLOCK_SIZE));
+  harness.processor.resetConfiguredProcessingState();
+  assert.equal(again.position, 0);
+  assert.ok(again.outputBuffer.every(value => value === 0));
+  await harness.send({ type: 'updatePlugins', plugins: [pluginConfig({ id: 8 })], masterBypass: false });
+  assert.equal(harness.processor.remoteSpectrumTaps.size, 0);
+});
+
+test('remote spectrum taps move the DSP path off the fused pipeline and back', async () => {
+  const harness = await createHarness();
+  await setupFallback(harness);
+  await harness.send({ type: 'dspEnableTypes', types: ['VolumePlugin'] });
+  await harness.send({ type: 'dspModule', module: { compiled: true } });
+  assert.equal(harness.processor.dspPipelineReady, true);
+  await harness.send({ type: 'setRemoteSpectrumTaps', pluginIds: [7] });
+  assert.equal(harness.processor.dspPipelineReady, false);
+  harness.posts.length = 0;
+  for (let block = 0; block < 32; block++) harness.process(sineBlock(block * BLOCK_SIZE));
+  assert.equal(harness.posts.filter(({ message }) => message.type === 'remoteSpectrumOverlay').length, 2);
+  await harness.send({ type: 'setRemoteSpectrumTaps', pluginIds: [] });
+  assert.equal(harness.processor.dspPipelineReady, true);
+});

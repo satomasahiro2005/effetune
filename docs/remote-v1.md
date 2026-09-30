@@ -85,7 +85,7 @@ requests that also return data, the ack comes first and the data message carries
 
 | Request | Effect |
 |---|---|
-| `{"op":"hello","v":1}` | Replies with `state`, which also carries `"features":["origin","savePreset","irSync","telemetry"]`. Any other `v` is rejected. Extra fields (such as `"app"`) are ignored. |
+| `{"op":"hello","v":1}` | Replies with `state`, which also carries `"features":["origin","savePreset","irSync","telemetry","overlays"]`. Any other `v` is rejected. Extra fields (such as `"app"`) are ignored. |
 | `{"op":"get"}` | Replies with `state`. |
 | `{"op":"chain","pipeline":[...]}` | Replaces the whole pipeline (at most 256 items). If any `nm` is unknown, the request fails and nothing changes. Master bypass keeps its state. |
 | `{"op":"params","index":i,"params":{...}}` | Applies the keys to stage `i` (0-based) of the current pipeline. Keys that are not given stay as they are. |
@@ -96,7 +96,7 @@ requests that also return data, the ack comes first and the data message carries
 | `{"op":"listIRs"}` | Replies `{"op":"irs","items":[{"id","name","bytes","ext","channels","sampleRate","frames"}]}`. |
 | `{"op":"getIR","id":"..."}` | Sends the IR file (see IR transfer). Unknown id: `ok:false`. |
 | `{"op":"putIR", ...}` | Uploads an IR file into the library (see IR transfer). |
-| `{"op":"telemetry","on":true,"fps":15}` | Subscribes this connection to the analyzer mirror (see Telemetry); `"on":false` ends it. `fps` is optional (default 15, clamped to 1..30); a non-number is rejected with `invalid fps`. A repeat call replaces the previous setting. The subscription ends when the socket closes. |
+| `{"op":"telemetry","on":true,"fps":15,"overlays":true}` | Subscribes this connection to the analyzer mirror (see Telemetry); `"on":false` ends it. `fps` is optional (default 15, clamped to 1..30); a non-number is rejected with `invalid fps`. `overlays` is optional (default false): `true` adds the PEQ spectrum overlay frames (see PEQ spectrum overlay); a value that is not a boolean is rejected with `overlays must be boolean`, and it has no effect without `"on":true`. A repeat call replaces the previous setting. The subscription ends when the socket closes. |
 
 ## Pushes (app → client)
 
@@ -166,6 +166,54 @@ Stereo Meter, Chroma Spiral, Note Spectrogram, Pitch Meter) in the active pipeli
   analyzer. While any client is subscribed the app keeps its analyzers running even when
   its window is hidden or minimized.
 
+### PEQ spectrum overlay
+
+With `"overlays":true` the same pushes also carry the spectrum before and after every
+5Band PEQ, 15Band PEQ and 5Band FIR PEQ stage of the active pipeline (the app's own
+After/Compare overlay, measured separately for the client):
+
+```json
+{"index":2,"nm":"5Band PEQ","type":4,"role":"before","data":"<base64>"}
+{"index":2,"nm":"5Band PEQ","type":4,"role":"after","data":"<base64>"}
+```
+
+- `role` is `"before"` (the stage's input, delayed by the stage's own latency so both
+  cover the same stretch of audio) or `"after"` (its output). Analyzer frames carry no
+  `role`. Overlay frames go only to connections that asked for them.
+- The stages are found again on every push by the app's own plugin id, so `index` and
+  `nm` follow edits on either side the same way as for analyzers.
+- Only the latest frame per stage and role is sent. Each `data` is a Spectrum Analyzer
+  v1 frame of 16420 bytes (little-endian):
+
+  | Offset | Field | Value |
+  |---|---|---|
+  | 0 | u16 frameType | 4 |
+  | 2 | u16 formatVersion | 1 |
+  | 4 | u32 tapId | the app's plugin id (overwrite it) |
+  | 8 | u32 sequence | per stage and role, +1 per frame |
+  | 12 | u16 payloadBytes | 16404 |
+  | 14 | u16 flags | 0 |
+  | 16 | f32 sampleRate | |
+  | 20 | u32 binCount | 2049 |
+  | 24 | u16 points | 12 |
+  | 26 | u16 flags | 0 |
+  | 28 | f32 current[2049] | dB per bin, DC to Nyquist |
+  | 8224 | f32 peaks[2049] | a copy of `current` |
+
+- `current` is not smoothed: a 4096-point Hann-windowed FFT of the mono sum (the app's
+  overlay FFT, `plugins/spectrum-overlay.js`), `10*log10(re² + im² + 1e-24)` plus 6.02 dB
+  at DC and 12.04 dB elsewhere, the scale of the Spectrum Analyzer. The client does its own
+  smoothing and peak hold.
+- Overlay frames are sent as soon as they are measured, without the app's visual-sync
+  delay (analyzer frames wait for it), so on outputs with a long latency the two can be
+  slightly apart.
+- Switching overlays on moves the audio thread from the fused DSP pipeline to the
+  per-effect path, as turning on the app's own overlay does. The app's own overlay mode,
+  quality and peak hold are not changed.
+- Size: one frame is 21896 base64 characters, so each PEQ adds about 650 KB/s at 15 fps
+  (measured: 655 KB/s for one PEQ, 1.98 MB/s of JSON for three). Nothing is sent for a
+  disabled PEQ, in master bypass or while idle; the client keeps the last frame.
+
 ## IR transfer
 
 IRs are identified the same way as in the app's IR library (`js/ir-library/ir-library-id.js`):
@@ -213,6 +261,9 @@ L/R) has a combined id and is left out.
   parameters as given. IR Reverb finds its file by id, so upload the IR before sending a chain
   that uses it; an IR Reverb that is already showing "IR not found" does not pick up a later
   upload by itself.
-- Only Analyzer stages are mirrored; per-effect meters (GR bars etc.) and the Pipeline Analyzer are not.
+- Only Analyzer stages and the PEQ spectrum overlays (5Band, 15Band and 5Band FIR PEQ) are
+  mirrored; other effects' overlays, per-effect meters (GR bars etc.) and the Pipeline
+  Analyzer are not. Overlay frames are full-resolution and sent for every PEQ at the push
+  rate, whether or not the client is showing them.
 - The IR library window does not refresh while it is open when an IR arrives.
 - No discovery (mDNS). Pair with the QR code or enter the address by hand.

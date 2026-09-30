@@ -2,7 +2,10 @@
 // While a client is subscribed, the main process asks for frames at the highest
 // requested rate. Frames of Analyzer-category stages are copied off the telemetry
 // hub (latest one per stage and frame type) and handed to main on each tick.
-// Nothing here touches the audio thread.
+// With "overlays", the PEQ spectrum overlay mirror (remote-overlay.js) adds its frames
+// to the same ticks; that one does ask the worklet for its own taps.
+
+import { RemoteOverlay } from './remote-overlay.js';
 
 const HEADER_BYTES = 16;
 const DEFAULT_FPS = 15;
@@ -18,12 +21,15 @@ export class RemoteTelemetry {
         this.taps = new Map();   // plugin.id -> { index, nm }
         this.latest = new Map(); // `${tapId}:${frameType}` -> { tapId, type, bytes }
         this.hub = null;
+        this.overlay = new RemoteOverlay(win);
+        this.overlayOn = false;
         this.onFrame = this.onFrame.bind(this);
         this.tick = this.tick.bind(this);
     }
 
     setControl(control) {
         const on = control?.on === true;
+        const overlays = on && control?.overlays === true;
         const fps = Math.min(MAX_FPS, Math.max(1, Math.round(Number(control?.fps) || DEFAULT_FPS)));
         const audioManager = this.win.audioManager;
         if (this.timer) clearTimeout(this.timer);
@@ -31,6 +37,8 @@ export class RemoteTelemetry {
         if (!on) {
             if (this.hub?.mirrorListener === this.onFrame) this.hub.setMirrorListener(null);
             this.hub = null;
+            this.overlayOn = false;
+            this.overlay.setEnabled(false);
             if (this.on) audioManager?.setRemoteTelemetryDemand?.(false);
             this.on = false;
             this.latest.clear();
@@ -39,6 +47,8 @@ export class RemoteTelemetry {
         }
         this.on = true;
         this.fps = fps;
+        this.overlayOn = overlays;
+        this.overlay.setEnabled(overlays);
         this.refreshTaps();
         this.hub = this.win.dspTelemetryHub || null;
         this.hub?.setMirrorListener?.(this.onFrame);
@@ -111,6 +121,7 @@ export class RemoteTelemetry {
             frames.push({ key, index: tap.index, nm: tap.nm, type: entry.type, bytes: entry.bytes });
         }
         this.latest.clear();
+        if (this.overlayOn) frames.push(...this.overlay.collect());
         if (frames.length > 0) {
             try { this.api.publishTelemetry(frames); } catch (_) { /* main went away */ }
         }

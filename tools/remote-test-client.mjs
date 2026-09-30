@@ -4,7 +4,8 @@
 // With REMOTE_TEST_CDP=<port> (the app's --remote-debugging-port) it also makes a
 // change on the PC side and checks that IR Reverb really loads the uploaded IR.
 // With REMOTE_TEST_INSPECT=<port> (the app's --inspect port) the analyzer mirror is
-// also tested with the window hidden. REMOTE_TEST_ONLY=telemetry runs only that part.
+// also tested with the window hidden. REMOTE_TEST_ONLY=telemetry runs only that part,
+// REMOTE_TEST_ONLY=overlay only the PEQ overlay mirror.
 // Prints every message (telemetry pushes are summarised) and exits 0 only if every
 // check passed.
 
@@ -23,6 +24,7 @@ const url = (t) => `ws://${hostPort}/?t=${encodeURIComponent(t)}`;
 const cdpPort = Number(process.env.REMOTE_TEST_CDP) || 0;
 const inspectPort = Number(process.env.REMOTE_TEST_INSPECT) || 0;
 const onlyTelemetry = process.env.REMOTE_TEST_ONLY === 'telemetry';
+const onlyOverlay = process.env.REMOTE_TEST_ONLY === 'overlay';
 const logDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.poc-logs');
 const CHUNK = 512 * 1024;
 
@@ -177,7 +179,10 @@ async function collectTelemetry(ws, ms) {
   let maxJson = 0;
   let emptyPushes = 0;
   let duplicateKeys = 0;
+  let totalB64 = 0;
+  let totalJson = 0;
   for (const push of pushes) {
+    totalJson += JSON.stringify(push).length;
     if (!Array.isArray(push.frames) || push.frames.length === 0) emptyPushes += 1;
     if (push.seq !== undefined) malformed += 1;
     maxFrames = Math.max(maxFrames, push.frames?.length || 0);
@@ -188,16 +193,18 @@ async function collectTelemetry(ws, ms) {
       const d = decodeFrame(f);
       if (!d.ok) { malformed += 1; continue; }
       raw += d.bytes.length;
-      const key = `${f.index}:${f.type}`;
+      const key = `${f.index}:${f.type}${f.role ? ':' + f.role : ''}`;
       if (keys.has(key)) duplicateKeys += 1;
       keys.add(key);
       const s = perStage.get(key) || {
-        index: f.index, nm: f.nm, type: f.type, version: d.header.version, frames: 0, raw: 0, b64: 0,
-        payloadBytes: d.header.payloadBytes, sequences: new Set()
+        index: f.index, nm: f.nm, type: f.type, role: f.role, version: d.header.version, frames: 0, raw: 0, b64: 0,
+        payloadBytes: d.header.payloadBytes, sequences: new Set(), last: null
       };
+      s.last = d;
       s.frames += 1;
       s.raw += d.bytes.length;
       s.b64 += f.data.length;
+      totalB64 += f.data.length;
       s.sequences.add(d.header.sequence);
       perStage.set(key, s);
     }
@@ -205,18 +212,19 @@ async function collectTelemetry(ws, ms) {
   }
   return {
     seconds, pushes, rate: pushes.length / seconds, perStage, malformed, maxFrames, maxRaw, maxJson,
-    emptyPushes, duplicateKeys
+    emptyPushes, duplicateKeys, totalB64, totalJson
   };
 }
 
 const measurements = [];
 function describeTelemetry(label, r) {
   const stages = [...r.perStage.values()].sort((a, b) => a.index - b.index).map((s) =>
-    `#${s.index} ${s.nm} type ${s.type} v${s.version} payload ${s.payloadBytes} B: ` +
+    `#${s.index} ${s.nm} type ${s.type}${s.role ? ' role ' + s.role : ''} v${s.version} payload ${s.payloadBytes} B: ` +
     `${(s.frames / r.seconds).toFixed(1)} frames/s, ${Math.round(s.raw / r.seconds)} raw B/s, ` +
     `${Math.round(s.b64 / r.seconds)} base64 B/s`);
   const line = `${label}: ${r.pushes.length} pushes in ${r.seconds.toFixed(2)} s (${r.rate.toFixed(1)}/s), ` +
-    `max ${r.maxFrames} frames / ${r.maxRaw} raw B / ${r.maxJson} JSON B per push`;
+    `max ${r.maxFrames} frames / ${r.maxRaw} raw B / ${r.maxJson} JSON B per push, ` +
+    `total ${Math.round(r.totalJson / r.seconds)} JSON B/s`;
   console.log('MEASURE ' + line);
   for (const s of stages) console.log('MEASURE   ' + s);
   measurements.push([line, ...stages.map((s) => '  ' + s)].join('\n'));
@@ -401,7 +409,228 @@ async function telemetryTests(ws, ws2, session) {
   } catch (_) { /* optional */ }
 }
 
+// ---- PEQ spectrum overlay mirror -------------------------------------------------
+
+// Spectrum Analyzer v1 payload of an overlay frame: { sampleRate, binCount, points, current, peaks }.
+function decodeSpectrum(d) {
+  const b = d.bytes;
+  const binCount = b.readUInt32LE(20);
+  const current = new Float32Array(binCount);
+  const peaks = new Float32Array(binCount);
+  for (let i = 0; i < binCount; i++) {
+    current[i] = b.readFloatLE(28 + i * 4);
+    peaks[i] = b.readFloatLE(28 + binCount * 4 + i * 4);
+  }
+  return { sampleRate: b.readFloatLE(16), binCount, points: b.readUInt16LE(24), flags2: b.readUInt16LE(26), current, peaks };
+}
+const roleStages = (r) => stagesOf(r).filter((s) => s.role !== undefined);
+const listRoles = (r) => roleStages(r).map((s) => `#${s.index} ${s.nm} ${s.role} ${(s.frames / r.seconds).toFixed(1)}/s`).join(', ');
+
+// Counts the worklet's spectrum messages seen by the main window in `ms` (UI overlay and remote taps).
+function portCounts(session, ms) {
+  return session.evaluate(`new Promise((resolve) => {
+    const port = window.workletNode?.port;
+    if (!port) { resolve(null); return; }
+    const counts = {};
+    const onMessage = (e) => {
+      const d = e.data || {};
+      if (d.type !== 'spectrumOverlay' && d.type !== 'remoteSpectrumOverlay') return;
+      const key = d.type + ':' + d.mode + ':' + (d.inputBuffer ? 'in+out' : 'out');
+      counts[key] = (counts[key] || 0) + 1;
+    };
+    port.addEventListener('message', onMessage);
+    setTimeout(() => { port.removeEventListener('message', onMessage); resolve(counts); }, ${ms});
+  })`);
+}
+
+function uiOverlayState(session) {
+  return session.evaluate(`(() => {
+    const buttons = [...document.querySelectorAll('.spectrum-overlay-toggle')];
+    return { modes: buttons.map((b) => b.dataset.spectrumMode), quality: window.SpectrumOverlay?.quality,
+      peakHold: window.appConfig?.spectrumOverlayPeakHold ?? null,
+      overlayEnabled: window.remoteControlController?.telemetry?.overlay?.enabled ?? null };
+  })()`);
+}
+
+async function overlayTests(ws, ws2, session) {
+  // A 1 kHz tone into a 5Band PEQ with +6 dB at 1 kHz; -60 dB after it for the speakers.
+  const peq = { nm: '5Band PEQ', en: true, f2: 1000, g2: 6, q2: 1 };
+  const chain = [
+    { nm: 'Oscillator', en: true, fr: 1000, vl: -20 },
+    peq,
+    { nm: 'Level Meter', en: true },
+    { nm: 'Volume', en: true, vl: -60 }
+  ];
+  let { ack } = await call(ws, { op: 'chain', pipeline: chain });
+  check('overlay: chain Oscillator 1 kHz / 5Band PEQ (+6 dB @ 1 kHz) / Level Meter / Volume acked',
+    ack.ok === true, JSON.stringify(ack));
+  await sleep(1500);
+
+  ({ ack } = await call(ws, { op: 'telemetry', on: true, fps: 15, overlays: 'yes' }));
+  check('overlay: non-boolean overlays -> ok:false "overlays must be boolean"',
+    ack.ok === false && ack.error === 'overlays must be boolean', ack.error);
+
+  // Subscribed without overlays: analyzer frames only.
+  ({ ack } = await call(ws, { op: 'telemetry', on: true, fps: 15 }));
+  await sleep(800);
+  let r = await collectTelemetry(ws, 1500);
+  check('overlay: without overlays:true no role frames (Level Meter still mirrored)',
+    roleStages(r).length === 0 && stagesOf(r).some((s) => s.nm === 'Level Meter'), listStages(r));
+
+  // The PC's own overlay on the same PEQ: After mode.
+  let ui = null;
+  if (session) {
+    await session.evaluate(`(() => { const b = document.querySelector('.spectrum-overlay-toggle');
+      if (!b) return false; b.scrollIntoView({ block: 'center' }); if (b.dataset.spectrumMode === 'off') b.click(); return true; })()`);
+    await sleep(800);
+    ui = await uiOverlayState(session);
+    check('overlay: the PC UI overlay of the PEQ is in After mode before subscribing',
+      ui.modes.length === 1 && ui.modes[0] === 'after', JSON.stringify(ui));
+    const counts = await portCounts(session, 1000);
+    check('overlay: before subscribing only the UI tap posts (After, output only)',
+      counts && (counts['spectrumOverlay:after:out'] || 0) >= 15 && !Object.keys(counts).some((k) => k.startsWith('remote')),
+      JSON.stringify(counts));
+  }
+
+  // Subscribe with overlays; a second client without them.
+  ({ ack } = await call(ws, { op: 'telemetry', on: true, fps: 15, overlays: true }));
+  check('overlay: subscribe with overlays:true acked', ack.ok === true, JSON.stringify(ack));
+  ({ ack } = await call(ws2, { op: 'telemetry', on: true, fps: 5 }));
+  await sleep(1000);
+  const [ra, rb] = await Promise.all([collectTelemetry(ws, 5000), collectTelemetry(ws2, 5000)]);
+  r = ra;
+  describeTelemetry('overlays on, one 5Band PEQ, 15 fps', r);
+  const before = roleStages(r).find((s) => s.role === 'before');
+  const after = roleStages(r).find((s) => s.role === 'after');
+  check('overlay: pushes at about the requested rate (14..15.5/s)', r.rate >= 14 && r.rate <= 15.5, r.rate.toFixed(2));
+  check('overlay: before and after frames for #1 5Band PEQ only',
+    !!before && !!after && roleStages(r).length === 2 && roleStages(r).every((s) => s.index === 1 && s.nm === '5Band PEQ'),
+    listRoles(r));
+  check('overlay: each role arrives at the push rate (>= 13 frames/s, one per push)',
+    !!before && !!after && before.frames / r.seconds >= 13 && after.frames / r.seconds >= 13 && r.duplicateKeys === 0,
+    listRoles(r));
+  check('overlay: frames are 16420 bytes, type 4, version 1, payload 16404; well-formed pushes',
+    !!before && !!after && [before, after].every((s) => s.raw / s.frames === 16420 && s.type === 4 && s.version === 1 &&
+      s.payloadBytes === 16404) && r.malformed === 0, listRoles(r));
+  check('overlay: a new sequence in every frame', !!after && after.sequences.size === after.frames &&
+    before.sequences.size === before.frames, `${after?.sequences.size}/${after?.frames}`);
+  check('overlay: analyzer frames keep flowing beside them (Level Meter, no role)',
+    stagesOf(r).some((s) => s.nm === 'Level Meter' && s.role === undefined));
+  check('overlay: a client without overlays:true gets no role frames',
+    rb.pushes.length > 0 && roleStages(rb).length === 0, listStages(rb));
+  if (before && after) {
+    const sb = decodeSpectrum(before.last);
+    const sa = decodeSpectrum(after.last);
+    const bin = Math.round(1000 * 4096 / sa.sampleRate);
+    let peak = bin;
+    for (let i = bin - 3; i <= bin + 3; i++) if (sa.current[i] > sa.current[peak]) peak = i;
+    const gain = sa.current[peak] - sb.current[peak];
+    const peaksEqual = sa.current.every((v, i) => v === sa.peaks[i]);
+    check('overlay: payload header 2049 bins, 12 points, sample rate of the PC', sa.binCount === 2049 && sa.points === 12 &&
+      sa.flags2 === 0 && sb.binCount === 2049 && sa.sampleRate >= 44100 && sa.sampleRate === sb.sampleRate,
+      JSON.stringify({ bins: sa.binCount, points: sa.points, rate: sa.sampleRate }));
+    check('overlay: peaks are a copy of current', peaksEqual);
+    check('overlay: the tone peaks at 1 kHz, near -20 dBFS before the PEQ',
+      Math.abs(peak - bin) <= 1 && sb.current[peak] > -30 && sb.current[peak] < -18,
+      `bin ${peak} (expected ${bin}), before ${sb.current[peak].toFixed(2)} dB`);
+    check('overlay: after - before at 1 kHz is the PEQ gain (+6 dB +/- 1)', Math.abs(gain - 6) <= 1,
+      `${gain.toFixed(2)} dB`);
+  }
+  const perPeq = before && after ? Math.round((before.b64 + after.b64) / r.seconds) : 0;
+  console.log(`MEASURE overlay bandwidth, one PEQ at 15 fps: ${perPeq} base64 B/s for the PEQ, ` +
+    `${Math.round(r.totalJson / r.seconds)} JSON B/s in total`);
+
+  if (session) {
+    const now = await uiOverlayState(session);
+    check('overlay: the PC UI overlay mode, quality and peak hold are unchanged while mirrored',
+      JSON.stringify(now.modes) === JSON.stringify(ui.modes) && now.quality === ui.quality && now.peakHold === ui.peakHold &&
+      now.overlayEnabled === true, JSON.stringify({ was: ui, now }));
+    const counts = await portCounts(session, 1000);
+    check('overlay: UI tap (After, output only) and remote tap (compare, input+output) both post',
+      counts && (counts['spectrumOverlay:after:out'] || 0) >= 15 && (counts['remoteSpectrumOverlay:compare:in+out'] || 0) >= 15 &&
+      Object.keys(counts).length === 2, JSON.stringify(counts));
+    // Remote overlays off: the UI tap on the same PEQ keeps running in its own mode.
+    await call(ws, { op: 'telemetry', on: true, fps: 15 });
+    await sleep(500);
+    const offCounts = await portCounts(session, 1000);
+    const offUi = await uiOverlayState(session);
+    check('overlay: switching the remote overlays off leaves the UI tap running in After mode',
+      offCounts && (offCounts['spectrumOverlay:after:out'] || 0) >= 15 &&
+      !Object.keys(offCounts).some((k) => k.startsWith('remote')) &&
+      JSON.stringify(offUi.modes) === JSON.stringify(ui.modes), JSON.stringify({ offCounts, modes: offUi.modes }));
+    await call(ws, { op: 'telemetry', on: true, fps: 15, overlays: true });
+  }
+
+  // Index follow: a stage in front moves the PEQ; two more PEQ types join.
+  const moved = [
+    { nm: 'Volume', en: true, vl: 0 },
+    chain[0], peq, chain[2],
+    { nm: '15Band PEQ', en: true },
+    { nm: '5Band FIR PEQ', en: true },
+    chain[3]
+  ];
+  ({ ack } = await call(ws, { op: 'chain', pipeline: moved }));
+  check('overlay: chain with a stage in front and 15Band PEQ / 5Band FIR PEQ added acked', ack.ok === true, JSON.stringify(ack));
+  await sleep(2000);
+  r = await collectTelemetry(ws, 4000);
+  describeTelemetry('overlays on, 5Band + 15Band + FIR PEQ, 15 fps', r);
+  const want = [[2, '5Band PEQ'], [4, '15Band PEQ'], [5, '5Band FIR PEQ']];
+  check('overlay: after the edit, frames follow the new indices (#2 5Band, #4 15Band, #5 FIR; both roles each)',
+    want.every(([i, nm]) => ['before', 'after'].every((role) =>
+      roleStages(r).some((s) => s.index === i && s.nm === nm && s.role === role && s.frames / r.seconds >= 12))) &&
+    roleStages(r).every((s) => moved[s.index]?.nm === s.nm), listRoles(r));
+  console.log(`MEASURE overlay bandwidth, three PEQs at 15 fps: ${Math.round(r.totalJson / r.seconds)} JSON B/s in total, ` +
+    `max ${r.maxJson} JSON B per push`);
+
+  // Resubscribe without overlays: the role frames stop, the worklet taps go away, the UI keeps its own.
+  ({ ack } = await call(ws, { op: 'telemetry', on: true, fps: 15 }));
+  await sleep(800);
+  r = await collectTelemetry(ws, 2000);
+  check('overlay: resubscribing without overlays stops the role frames (analyzer frames continue)',
+    roleStages(r).length === 0 && stagesOf(r).some((s) => s.nm === 'Level Meter'), listStages(r));
+  if (session) {
+    const counts = await portCounts(session, 1000);
+    const now = await uiOverlayState(session);
+    check('overlay: after overlays off the worklet posts no remote spectra; the renderer mirror is off',
+      counts && !Object.keys(counts).some((k) => k.startsWith('remote')) && now.overlayEnabled === false,
+      JSON.stringify({ counts, now }));
+  }
+
+  // Back on, then on:false with overlays set: nothing at all.
+  ({ ack } = await call(ws, { op: 'telemetry', on: true, fps: 15, overlays: true }));
+  await sleep(1000);
+  r = await collectTelemetry(ws, 1000);
+  check('overlay: re-enabled overlays bring the role frames back (3 PEQs x 2 roles)', roleStages(r).length === 6, listRoles(r));
+  ({ ack } = await call(ws, { op: 'telemetry', on: false, overlays: true }));
+  await call(ws2, { op: 'telemetry', on: false });
+  await sleep(500);
+  r = await collectTelemetry(ws, 1500);
+  check('overlay: no pushes after on:false', r.pushes.length === 0, `${r.pushes.length} pushes`);
+  if (session) {
+    const counts = await portCounts(session, 1000);
+    check('overlay: on:false releases the remote taps in the worklet',
+      counts && !Object.keys(counts).some((k) => k.startsWith('remote')), JSON.stringify(counts));
+  }
+  try {
+    fs.writeFileSync(path.join(logDir, 'overlay-measure.log'), measurements.join('\n') + '\n');
+  } catch (_) { /* optional */ }
+}
+
 async function main() {
+  if (onlyOverlay) {
+    const ws = await open(token, 'A');
+    const hello = await call(ws, { op: 'hello', v: 1 }, 'state');
+    check('hello state lists the overlays feature', !!hello.data?.features?.includes('overlays'),
+      JSON.stringify(hello.data?.features));
+    const ws2 = await open(token, 'B');
+    await call(ws2, { op: 'hello', v: 1 }, 'state');
+    const session = cdpPort ? await mainWindowSession(cdpPort) : null;
+    await overlayTests(ws, ws2, session);
+    session?.close();
+    ws2.close();
+    ws.close();
+    return;
+  }
   if (onlyTelemetry) {
     const ws = await open(token, 'A');
     const hello = await call(ws, { op: 'hello', v: 1 }, 'state');
@@ -441,7 +670,7 @@ async function main() {
   check('hello returned state (app 2.11.0)', data && data.op === 'state' && data.app === '2.11.0' &&
     Array.isArray(data.pipeline) && typeof data.rev === 'number' && typeof data.masterBypass === 'boolean');
   check('hello state carries origin and features', data && data.origin === 'remote' &&
-    Array.isArray(data.features) && ['origin', 'savePreset', 'irSync', 'telemetry'].every((f) => data.features.includes(f)),
+    Array.isArray(data.features) && ['origin', 'savePreset', 'irSync', 'telemetry', 'overlays'].every((f) => data.features.includes(f)),
     JSON.stringify({ origin: data?.origin, features: data?.features }));
   const initialRev = data.rev;
 
@@ -650,6 +879,9 @@ async function main() {
 
   // 12. analyzer mirror.
   await telemetryTests(ws, ws2, session);
+
+  // 13. PEQ spectrum overlay mirror.
+  await overlayTests(ws, ws2, session);
 
   session?.close();
   ws2.close();

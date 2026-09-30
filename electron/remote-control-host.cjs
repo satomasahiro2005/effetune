@@ -63,7 +63,7 @@ const MAX_UPLOADS_PER_CLIENT = 2;
 const SEND_HIGH_WATER_BYTES = 8 * 1024 * 1024;
 const IR_ID_PATTERN = /^[a-f0-9]{24}$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
-const FEATURES = Object.freeze(['origin', 'savePreset', 'irSync', 'telemetry']);
+const FEATURES = Object.freeze(['origin', 'savePreset', 'irSync', 'telemetry', 'overlays']);
 const CLIENT_OPS = new Set([
   'hello', 'get', 'chain', 'params', 'bypass', 'listPresets', 'getPreset',
   'savePreset', 'listIRs', 'getIR', 'putIR', 'telemetry'
@@ -853,10 +853,15 @@ class RemoteControlHost {
       }
       fps = Math.min(TELEMETRY_MAX_FPS, Math.max(1, Math.round(msg.fps)));
     }
+    if (msg.overlays !== undefined && typeof msg.overlays !== 'boolean') {
+      this.ack(ws, seq, false, 'overlays must be boolean');
+      return;
+    }
     this.clearTelemetry(ws);
     if (msg.on) {
       ws.telemetry = {
         fps,
+        overlays: msg.overlays === true, // PEQ spectrum overlay frames (role before/after)
         period: 1000 / fps,
         nextAt: 0,      // earliest time of the next push (schedule, not last send + period)
         timer: null,
@@ -876,14 +881,16 @@ class RemoteControlHost {
 
   updateTelemetryDemand() {
     let maxFps = 0;
+    let overlays = false;
     if (this.wss && this.connectString) {
       for (const ws of this.wss.clients) {
         if (ws.authenticated && ws.telemetry && ws.readyState === 1) {
           maxFps = Math.max(maxFps, ws.telemetry.fps);
+          if (ws.telemetry.overlays) overlays = true;
         }
       }
     }
-    this.sendTelemetryDemand({ on: maxFps > 0, fps: maxFps });
+    this.sendTelemetryDemand({ on: maxFps > 0, fps: maxFps, overlays });
   }
 
   sendTelemetryDemand(demand) {
@@ -898,7 +905,7 @@ class RemoteControlHost {
     try {
       win.webContents.send(CHANNELS.telemetryControl, demand);
       this.telemetryDemandJson = json;
-      this.log(`[remote] analyzer mirror ${demand.on ? `on at ${demand.fps} fps` : 'off'}`);
+      this.log(`[remote] analyzer mirror ${demand.on ? `on at ${demand.fps} fps${demand.overlays ? ' with PEQ overlays' : ''}` : 'off'}`);
     } catch (_) {
       this.telemetryDemandJson = null;
     }
@@ -913,6 +920,7 @@ class RemoteControlHost {
       for (const f of frames) {
         if (!f || typeof f.key !== 'string' || !(f.bytes instanceof Uint8Array)) continue;
         if (!Number.isInteger(f.index) || typeof f.nm !== 'string') continue;
+        if (f.role !== undefined && !(sub.overlays && (f.role === 'before' || f.role === 'after'))) continue;
         sub.pending.set(f.key, f); // newer overwrites older
       }
       this.pumpTelemetry(ws);
@@ -972,6 +980,7 @@ class RemoteControlHost {
         index: f.index,
         nm: f.nm,
         type: f.type,
+        ...(f.role ? { role: f.role } : {}),
         data: Buffer.from(f.bytes.buffer, f.bytes.byteOffset, f.bytes.byteLength).toString('base64')
       }))
     });
