@@ -1,6 +1,6 @@
 'use strict';
 
-// PoC: LAN remote control ("remote-v1") for the EffectDeck iOS app.
+// PoC: LAN remote control ("remote-v1"). Client-neutral; see docs/remote-v1.md.
 //
 // The WebSocket server lives in the main process (the renderer CSP forbids
 // ws:). Every client operation is forwarded to the renderer over versioned
@@ -117,8 +117,9 @@ function pickLanAddress(interfaces = os.networkInterfaces()) {
   };
 }
 
+// The QR carries the API's own endpoint, not a link to any particular client app.
 function pairingUrl(address, port, token) {
-  return `effectdeck://remote?h=${address}:${port}&t=${encodeURIComponent(token)}`;
+  return `ws://${address}:${port}/?t=${encodeURIComponent(token)}`;
 }
 
 function qrSvgDataUrl(text) {

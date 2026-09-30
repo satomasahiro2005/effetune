@@ -227,8 +227,8 @@ try {
   const { opened, panel } = await openPanel();
   check('Settings panel opens', opened === true);
   let status = await panel.evaluate('remotePanel.getStatus()');
-  const urlRe = new RegExp(`^effectdeck://remote\\?h=(\\d+\\.\\d+\\.\\d+\\.\\d+):${port}&t=${token}$`);
-  check('panel status: running with pairing URL effectdeck://remote?h=<ip>:port&t=token',
+  const urlRe = new RegExp(`^ws://(\\d+\\.\\d+\\.\\d+\\.\\d+):${port}/\\?t=${token}$`);
+  check('panel status: running with pairing URL ws://<ip>:port/?t=token',
     status.running === true && urlRe.test(status.url), status.url);
   check('panel status: QR image for every offered address',
     status.addresses.length >= 1 && status.addresses.every((a) => /^data:image\/svg\+xml;base64,/.test(a.qr || '')),
@@ -290,7 +290,7 @@ try {
   check('new token and enabled state persisted in config.json',
     cfg.remoteControlToken === newToken && cfg.remoteControlEnabled === true, JSON.stringify({
       remoteControlEnabled: cfg.remoteControlEnabled, remoteControlToken: cfg.remoteControlToken }));
-  check('panel URL uses the new token', status.url.endsWith(`&t=${newToken}`), status.url);
+  check('panel URL uses the new token', status.url.endsWith(`/?t=${newToken}`), status.url);
   await sleep(300);
   await screenshot(panel, 'panel-new-token.png');
   panel.close();
@@ -350,8 +350,8 @@ try {
   const busyStatus = await busyPanel.panel.evaluate('remotePanel.getStatus()');
   check('busy port: pairing URL, connect string and status use the bound port',
     busyStatus.port === fallbackPort && busyStatus.requestedPort === port &&
-    busyStatus.url.includes(`:${fallbackPort}&t=`) && busyStatus.connectString.includes(`:${fallbackPort}/`) &&
-    busyStatus.addresses.every((a) => a.url.includes(`:${fallbackPort}&t=`)),
+    busyStatus.url.includes(`:${fallbackPort}/?t=`) && busyStatus.connectString.includes(`:${fallbackPort}/`) &&
+    busyStatus.addresses.every((a) => a.url.includes(`:${fallbackPort}/?t=`)),
     JSON.stringify({ port: busyStatus.port, url: busyStatus.url }));
   const busyDom = await busyPanel.panel.evaluate(`document.getElementById('status').textContent`);
   check('busy port: the Remote Control window shows the actual port', busyDom.includes(`port ${fallbackPort}`), busyDom);

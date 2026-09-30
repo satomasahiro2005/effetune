@@ -43,10 +43,10 @@ the window title.
 
 ## Pairing
 
-The QR code encodes
+The QR code encodes the connection URL itself, so any client can use it:
 
 ```
-effectdeck://remote?h=<LAN IPv4>:<port>&t=<token>
+ws://<LAN IPv4>:<port>/?t=<token>
 ```
 
 The address is the computer's private IPv4 address (192.168.x, 10.x, 172.16-31.x). Virtual
