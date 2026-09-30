@@ -174,6 +174,8 @@ const remoteV1 = Object.freeze({
   rendererUnavailable: () => ipcRenderer.invoke('remote-v1:renderer-unavailable', {}),
   respond: response => ipcRenderer.invoke('remote-v1:response', response),
   publishState: snapshot => ipcRenderer.invoke('remote-v1:state', snapshot),
+  openPanel: () => ipcRenderer.invoke('remote-v1:open-panel', {}),
+  getStatus: () => ipcRenderer.invoke('remote-v1:get-status', {}),
   onRequest: callback => addSingleArgIpcListener('remote-v1:request', callback),
   onStatus: callback => addSingleArgIpcListener('remote-v1:status', callback)
 });

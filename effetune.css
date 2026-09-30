@@ -931,6 +931,7 @@ body.layout-mobile #pipelineStats {
 .pipeline-header-right .copy-button,
 .pipeline-header-right .paste-button,
 .pipeline-header-right .share-button,
+.pipeline-header-right .remote-control-button,
 .pipeline-header-right .pipeline-analyzer-button,
 .pipeline-header-right .column-control-button {
     margin-left: 0;
@@ -947,12 +948,55 @@ body.layout-mobile #pipelineStats {
 
 .pipeline-preset-button,
 .share-button,
+.remote-control-button,
 .pipeline-analyzer-button {
     height: 24px;
     padding: 4px 8px;
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+/* Remote Control (LAN) status icon: dim when off, accent while listening,
+   with a count badge while devices are connected. Shown by the Electron app only. */
+.remote-control-button {
+    position: relative;
+}
+
+.pipeline-toolbar-group[hidden],
+.remote-control-badge[hidden] {
+    display: none;
+}
+
+.remote-control-button[data-state="off"] {
+    opacity: 0.5;
+}
+
+.remote-control-button[data-state="listening"],
+.remote-control-button[data-state="connected"] {
+    color: var(--et-accent);
+}
+
+.remote-control-button[data-state="error"] {
+    color: var(--et-danger);
+}
+
+.remote-control-badge {
+    position: absolute;
+    top: -3px;
+    right: -4px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    box-sizing: border-box;
+    border-radius: 7px;
+    background-color: var(--et-accent);
+    color: var(--et-surface-10);
+    font-size: 10px;
+    font-weight: bold;
+    line-height: 14px;
+    text-align: center;
+    pointer-events: none;
 }
 
 /* Pipeline toggle and menu styles */

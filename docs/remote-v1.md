@@ -16,16 +16,28 @@ shows a QR code and the pairing link as text. The switch and the token are saved
 replaces the token; clients that are connected are closed with 4401 and must pair again.
 Turning the switch off closes all clients (1001) and releases the port.
 
+In the main window, the Effect Pipeline header has a Remote Control icon (broadcast symbol,
+tooltip "Remote Control", Electron app only). It is dimmed while the server is off, drawn in the
+accent color while it listens, and shows a small badge with the number of connected devices.
+Clicking it opens the same Remote Control window.
+
+The port is **47300 unless it is busy**. When another process (for example a previous instance
+that is still shutting down) holds it, the app retries the same port 4 times, 750 ms apart, then
+moves up to the next free port (47301 ... 47309). The pairing link, QR code, connect string and
+window title always carry the port that was actually bound, and the Remote Control window shows
+it (with a note such as "47300 was busy"). If every port from 47300 to 47309 is taken, the window
+reports the error.
+
 Overrides, mainly for tests:
 
 ```
 set EFFETUNE_REMOTE=1                 (or pass --remote)   start the server regardless of the switch
 set EFFETUNE_REMOTE_TOKEN=<token>     use this token instead of the saved one
-set EFFETUNE_REMOTE_PORT=<port>       listen on another port (default 47300)
+set EFFETUNE_REMOTE_PORT=<port>       first port to try instead of 47300 (fallback: <port>+1 ... <port>+9)
 npm start
 ```
 
-While the server is listening, `[remote] CONNECT STRING: <LAN IPv4>:47300/<token>` and
+While the server is listening, `[remote] CONNECT STRING: <LAN IPv4>:<port>/<token>` and
 `[remote] PAIRING URL: ...` are printed to the console, and the connect string is appended to
 the window title.
 
@@ -34,7 +46,7 @@ the window title.
 The QR code encodes
 
 ```
-effectdeck://remote?h=<LAN IPv4>:47300&t=<token>
+effectdeck://remote?h=<LAN IPv4>:<port>&t=<token>
 ```
 
 The address is the computer's private IPv4 address (192.168.x, 10.x, 172.16-31.x). Virtual
@@ -44,7 +56,7 @@ offers a choice between them.
 
 ## Connection
 
-- `ws://<host>:47300/?t=<token>`
+- `ws://<host>:<port>/?t=<token>`
 - A missing or wrong token: the socket is closed with code **4401**.
 - At most 16 authenticated clients; extra ones are closed with **1013**.
 - Frames are JSON text, at most 4 MB.

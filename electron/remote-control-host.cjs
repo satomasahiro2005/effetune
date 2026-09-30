@@ -10,7 +10,9 @@
 // The server is switched on and off from Settings > Remote Control... (the
 // choice and a persistent token are kept in config.json). EFFETUNE_REMOTE=1 or
 // --remote forces it on at startup; EFFETUNE_REMOTE_TOKEN fixes the token and
-// EFFETUNE_REMOTE_PORT the port (for tests).
+// EFFETUNE_REMOTE_PORT the first port to try (for tests). A busy port is retried
+// a few times, then the next free port above it is used (47300 -> 47301..47309);
+// the pairing URL, QR code, connect string and window title carry the bound port.
 
 const crypto = require('node:crypto');
 const http = require('node:http');
@@ -23,8 +25,10 @@ const CHANNELS = Object.freeze({
   rendererUnavailable: 'remote-v1:renderer-unavailable',
   response: 'remote-v1:response',
   state: 'remote-v1:state',
+  openPanel: 'remote-v1:open-panel',
   request: 'remote-v1:request',
-  status: 'remote-v1:status'
+  status: 'remote-v1:status',
+  getStatus: 'remote-v1:get-status'
 });
 
 const PANEL_CHANNELS = Object.freeze({
@@ -35,6 +39,9 @@ const PANEL_CHANNELS = Object.freeze({
 });
 
 const PORT = 47300;
+const PORT_FALLBACK_COUNT = 9;      // 47301..47309 when 47300 stays busy
+const PORT_RETRY_ATTEMPTS = 4;      // a previous instance may still be releasing the port
+const PORT_RETRY_DELAY_MS = 750;
 const MAX_WS_BYTES = 4 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10000;
 const IR_REQUEST_TIMEOUT_MS = 120000;
@@ -148,7 +155,8 @@ class RemoteControlHost {
     this.forced = isRemoteForced(env, argv);
     const cfg = this.loadConfig();
     this.enabled = this.forced || cfg.remoteControlEnabled === true;
-    this.port = Number(env.EFFETUNE_REMOTE_PORT) || PORT;
+    this.basePort = Number(env.EFFETUNE_REMOTE_PORT) || PORT;
+    this.port = this.basePort; // the port actually bound once running
     this.tokenFromEnvironment = typeof env.EFFETUNE_REMOTE_TOKEN === 'string' &&
       env.EFFETUNE_REMOTE_TOKEN.length > 0;
     this.token = this.tokenFromEnvironment ? env.EFFETUNE_REMOTE_TOKEN : this.ensurePersistentToken(cfg);
@@ -257,6 +265,7 @@ class RemoteControlHost {
       running,
       forced: this.forced,
       port: this.port,
+      requestedPort: this.basePort,
       token: this.token,
       tokenFromEnvironment: this.tokenFromEnvironment,
       connectString: this.connectString,
@@ -264,6 +273,17 @@ class RemoteControlHost {
       url: addresses[0]?.url || null,
       error: this.listenError,
       clients: this.countClients()
+    };
+  }
+
+  // What the main-window toolbar icon needs: off / listening / N clients.
+  getBriefStatus() {
+    return {
+      enabled: !!this.connectString,
+      wanted: this.enabled,
+      port: this.port,
+      clients: this.countClients(),
+      error: this.listenError
     };
   }
 
@@ -277,7 +297,7 @@ class RemoteControlHost {
     this.refreshTitle();
     const win = this.getMainWindow();
     if (win?.webContents && !win.isDestroyed?.()) {
-      try { win.webContents.send(CHANNELS.status, { enabled: !!this.connectString }); } catch (_) { /* ignore */ }
+      try { win.webContents.send(CHANNELS.status, this.getBriefStatus()); } catch (_) { /* ignore */ }
     }
     const panel = this.panelWindow;
     if (panel && !panel.isDestroyed()) {
@@ -303,6 +323,7 @@ class RemoteControlHost {
     const lan = pickLanAddress();
     this.lan = lan;
     this.listenError = null;
+    this.port = this.basePort;
     const server = http.createServer((req, res) => {
       res.writeHead(426, { 'Content-Type': 'text/plain' });
       res.end('EffeTune remote-v1: WebSocket only\n');
@@ -320,39 +341,73 @@ class RemoteControlHost {
       }
     }, PING_INTERVAL_MS);
     this.pingTimer.unref?.();
-    return new Promise(resolve => {
-      let bound = false;
-      server.on('error', error => {
-        this.log(`[remote] server error: ${error.code || ''} ${error.message}`);
-        if (bound) return;
-        this.listenError = error.code === 'EADDRINUSE'
-          ? `port ${this.port} is already in use`
-          : String(error.message || error);
+    return this.bindWithFallback(server).then(port => {
+      if (this.disposed || this.server !== server) return false;
+      if (port === null) {
         this.closeServer(server, wss);
         if (this.server === server) { this.server = null; this.wss = null; }
         clearInterval(this.pingTimer);
+        this.pingTimer = null;
         this.startPromise = null;
         this.emitStatus();
-        resolve(false);
-      });
-      server.listen(this.port, '0.0.0.0', () => {
-        bound = true;
-        if (this.disposed || this.server !== server) { resolve(false); return; }
-        // Only advertise the connect string once the port is actually bound.
-        this.connectString = `${lan.best}:${this.port}/${this.token}`;
-        this.log(`[remote] listening on 0.0.0.0:${this.port}`);
-        this.log(`[remote] CONNECT STRING: ${this.connectString}`);
-        this.log(`[remote] PAIRING URL: ${pairingUrl(lan.best, this.port, this.token)}`);
-        if (lan.candidates.length > 1) {
-          this.log('[remote] other addresses: ' +
-            lan.candidates.map(c => `${c.address} (${c.name})`).join(', '));
-        }
-        // Make the renderer publish a fresh snapshot for the new session.
-        this.lastSnapshotJson = null;
-        this.emitStatus();
-        resolve(true);
-      });
+        return false;
+      }
+      this.port = port;
+      // Only advertise the connect string once the port is actually bound.
+      this.connectString = `${lan.best}:${this.port}/${this.token}`;
+      this.log(`[remote] listening on 0.0.0.0:${this.port}`);
+      this.log(`[remote] CONNECT STRING: ${this.connectString}`);
+      this.log(`[remote] PAIRING URL: ${pairingUrl(lan.best, this.port, this.token)}`);
+      if (lan.candidates.length > 1) {
+        this.log('[remote] other addresses: ' +
+          lan.candidates.map(c => `${c.address} (${c.name})`).join(', '));
+      }
+      // Make the renderer publish a fresh snapshot for the new session.
+      this.lastSnapshotJson = null;
+      this.emitStatus();
+      return true;
     });
+  }
+
+  // Binds `server`: the requested port first (retried while a previous
+  // instance releases it), then the next ports up. Resolves the bound port, or
+  // null with this.listenError set.
+  async bindWithFallback(server) {
+    const stillWanted = () => this.enabled && !this.disposed && this.server === server;
+    const tryPort = port => new Promise(resolve => {
+      const onError = error => { server.removeListener('listening', onListening); resolve(error); };
+      const onListening = () => { server.removeListener('error', onError); resolve(null); };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(port, '0.0.0.0');
+    });
+    const last = Math.min(this.basePort + PORT_FALLBACK_COUNT, 65535);
+    for (let port = this.basePort; port <= last; port += 1) {
+      for (let attempt = 1; attempt <= PORT_RETRY_ATTEMPTS; attempt += 1) {
+        if (!stillWanted()) return null;
+        const error = await tryPort(port);
+        if (!error) {
+          if (port !== this.basePort) {
+            this.log(`[remote] port ${this.basePort} is busy; using ${port} instead`);
+          }
+          return port;
+        }
+        if (error.code !== 'EADDRINUSE') {
+          this.log(`[remote] server error: ${error.code || ''} ${error.message}`);
+          this.listenError = String(error.message || error);
+          return null;
+        }
+        this.log(`[remote] port ${port} is in use (attempt ${attempt}/${PORT_RETRY_ATTEMPTS})`);
+        // A fallback port is not worth waiting for: a stale instance only
+        // holds the requested port.
+        if (port !== this.basePort) break;
+        if (attempt < PORT_RETRY_ATTEMPTS) {
+          await new Promise(resolve => setTimeout(resolve, PORT_RETRY_DELAY_MS));
+        }
+      }
+    }
+    this.listenError = `ports ${this.basePort}-${last} are all in use`;
+    return null;
   }
 
   closeServer(server, wss, { closeCode = 1001, reason = 'shutdown' } = {}) {
@@ -478,7 +533,7 @@ class RemoteControlHost {
   setRendererReady() {
     this.rendererReady = true;
     for (const waiter of [...this.readyWaiters]) waiter(true);
-    return { apiVersion: 1, enabled: !!this.connectString };
+    return { apiVersion: 1, ...this.getBriefStatus() };
   }
 
   waitForRenderer(ms = RENDERER_WAIT_MS) {
@@ -874,7 +929,9 @@ function registerRemoteControlIpc({ ipcMain, getHost, getMainWindow }) {
     [CHANNELS.rendererReady, host => (host ? host.setRendererReady() : { enabled: false })],
     [CHANNELS.rendererUnavailable, host => (host ? host.setRendererUnavailable() : false)],
     [CHANNELS.response, (host, response) => (host ? host.handleRendererResponse(response) : false)],
-    [CHANNELS.state, (host, snapshot) => (host ? host.handleRendererState(snapshot) : false)]
+    [CHANNELS.state, (host, snapshot) => (host ? host.handleRendererState(snapshot) : false)],
+    [CHANNELS.openPanel, host => { host?.openPanel(); return !!host; }],
+    [CHANNELS.getStatus, host => (host ? host.getBriefStatus() : { enabled: false })]
   ]);
   for (const [channel, handler] of handlers) {
     ipcMain.handle(channel, (event, ...args) => {

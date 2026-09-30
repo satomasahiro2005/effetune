@@ -122,7 +122,8 @@
     if (!s.enabled) return { text: 'Off', error: false };
     if (!s.running) return { text: 'Starting…', error: false };
     const clients = s.clients === 1 ? '1 device connected' : `${s.clients} devices connected`;
-    return { text: `On · port ${s.port} · ${clients}`, error: false };
+    const busy = s.requestedPort && s.requestedPort !== s.port ? ` (${s.requestedPort} was busy)` : '';
+    return { text: `On · port ${s.port}${busy} · ${clients}`, error: false };
   }
 
   function render() {

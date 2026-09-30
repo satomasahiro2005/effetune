@@ -97,9 +97,9 @@ async function waitPort(p, open, ms = 90000) {
 }
 
 // Opens a client and resolves { ws, hello } or { closeCode } if the server closes it.
-function tryClient(t) {
+function tryClient(t, p = port) {
   return new Promise((resolve) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/?t=${encodeURIComponent(t)}`);
+    const ws = new WebSocket(`ws://127.0.0.1:${p}/?t=${encodeURIComponent(t)}`);
     const inbox = [];
     ws.closed = new Promise((res) => ws.once('close', (code) => res(code)));
     ws.on('message', (d) => {
@@ -140,7 +140,62 @@ async function screenshot(panel, file) {
   console.log(`saved .poc-logs/${file}`);
 }
 
+// State of the Effect Pipeline toolbar icon, read from the main window.
+async function readIcon(session) {
+  return session.evaluate(`(() => {
+    const b = document.getElementById('remoteControlButton');
+    const g = document.getElementById('remoteControlGroup');
+    const badge = document.getElementById('remoteControlBadge');
+    const r = b.getBoundingClientRect();
+    const sib = document.getElementById('shareButton').getBoundingClientRect();
+    return { state: b.dataset.state, title: b.title, badge: badge.hidden ? '' : badge.textContent,
+      visible: !g.hidden && r.width > 0, inHeader: !!b.closest('.pipeline-header'),
+      height: Math.round(r.height), shareHeight: Math.round(sib.height) };
+  })()`);
+}
+async function waitIcon(session, want, ms = 8000) {
+  const deadline = Date.now() + ms;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await readIcon(session);
+    if (last.state === want.state && last.badge === (want.badge ?? '')) return last;
+    await sleep(200);
+  }
+  return last;
+}
+async function shotHeader(session, file) {
+  const box = await session.evaluate(`(() => { const r = document.querySelector('.pipeline-header').getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`);
+  const shot = await session.send('Page.captureScreenshot', { format: 'png', clip: { ...box, scale: 2 } });
+  fs.writeFileSync(path.join(logDir, file), Buffer.from(shot.data, 'base64'));
+  console.log(`saved .poc-logs/${file}`);
+}
+function windowTitle(child) {
+  if (process.platform !== 'win32') return '';
+  const ps = spawnSync('powershell', ['-NoProfile', '-Command',
+    `(Get-Process -Id ${child.pid}).MainWindowTitle`], { encoding: 'utf8' });
+  return (ps.stdout || '').trim();
+}
+// A dummy listener standing in for a stale instance that still holds the port.
+function occupy(p) {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer((sock) => sock.destroy());
+    srv.once('error', reject);
+    srv.listen(p, '0.0.0.0', () => resolve(srv));
+  });
+}
+const closeServer = (srv) => new Promise((resolve) => srv.close(() => resolve()));
+async function waitLog(file, re, ms = 90000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    try { if (re.test(fs.readFileSync(file, 'utf8'))) return true; } catch (_) { /* not yet */ }
+    await sleep(100);
+  }
+  return false;
+}
+
 let child = null;
+let dummy = null;
 try {
   // ---- phase 1: forced on (env), full protocol test, then the panel ----------
   child = launch('forced', { forced: true });
@@ -191,17 +246,29 @@ try {
   // Toggle off: clients are closed and the port is released.
   const c1 = await tryClient(token);
   check('client connects before toggling off', !!c1.hello, JSON.stringify(c1.closeCode ?? ''));
+  const main1 = await mainWindowSession(cdpPort);
+  let icon = await waitIcon(main1, { state: 'connected', badge: '1' });
+  check('pipeline header icon: connected with badge 1, in the Effect Pipeline header, same height as its neighbours',
+    icon.state === 'connected' && icon.badge === '1' && icon.visible && icon.inHeader && icon.height === icon.shareHeight &&
+    /1 device connected \(port \d+\)/.test(icon.title), JSON.stringify(icon));
+  await shotHeader(main1, 'header-connected.png');
   status = await panel.evaluate('remotePanel.setEnabled(false)');
   const c1Close = await Promise.race([c1.ws?.closed, sleep(5000).then(() => 'no-close')]);
   check('toggle off closes connected clients', c1Close === 1001, String(c1Close));
   check('toggle off releases the port', await waitPort(port, false, 5000));
   check('toggle off persisted (remoteControlEnabled false)', readConfig().remoteControlEnabled === false && status.running === false);
+  icon = await waitIcon(main1, { state: 'off' });
+  check('pipeline header icon: off after toggling off', icon.state === 'off' && icon.badge === '' && icon.title === 'Remote Control', JSON.stringify(icon));
+  await shotHeader(main1, 'header-off.png');
   await sleep(300); // let the switch animation finish
   await screenshot(panel, 'panel-off.png');
 
   // Toggle on again.
   status = await panel.evaluate('remotePanel.setEnabled(true)');
   check('toggle on listens again', status.running === true && await waitPort(port, true, 5000));
+  icon = await waitIcon(main1, { state: 'listening' });
+  check('pipeline header icon: listening after toggling on', icon.state === 'listening' && icon.badge === '', JSON.stringify(icon));
+  await shotHeader(main1, 'header-listening.png');
   // Off and on sent back to back: the later "on" must win.
   const rapid = await panel.evaluate('Promise.all([remotePanel.setEnabled(false), remotePanel.setEnabled(true)]).then(r => r[1])');
   check('rapid off+on ends running', rapid.running === true && rapid.enabled === true &&
@@ -227,6 +294,7 @@ try {
   await sleep(300);
   await screenshot(panel, 'panel-new-token.png');
   panel.close();
+  main1.close();
   await stop(child);
 
   // ---- phase 2: no env override; the saved setting starts the server ---------
@@ -235,6 +303,16 @@ try {
   const p2 = await tryClient(newToken);
   check('restart without override: saved token accepted', !!p2.hello, JSON.stringify(p2.closeCode ?? p2.timeout ?? ''));
   p2.ws?.close();
+  const main2 = await mainWindowSession(cdpPort);
+  await waitIcon(main2, { state: 'listening' });
+  await main2.evaluate(`document.getElementById('remoteControlButton').click()`);
+  let clickOpened = false;
+  try {
+    await waitForTarget(cdpPort, (t) => t.type === 'page' && /remote-control-panel\.html/.test(t.url), 8000);
+    clickOpened = true;
+  } catch (_) { /* not opened */ }
+  check('clicking the pipeline header icon opens the Remote Control window', clickOpened);
+  main2.close();
   await stop(child);
 
   // ---- phase 3: saved as off -> no server ------------------------------------
@@ -250,11 +328,59 @@ try {
   check('saved as off: renderer bridge idle', bridge === true);
   check('saved as off: port stays closed', !(await portOpen(port)));
   await stop(child);
+
+  // ---- phase 4: the port is held by something else -> fall back to the next one
+  const fallbackPort = port + 1;
+  fs.writeFileSync(configPath, JSON.stringify({ ...readConfig(), remoteControlEnabled: true }, null, 2));
+  dummy = await occupy(port);
+  child = launch('port-busy', { forced: true });
+  const busyLog = path.join(logDir, 'app-port-busy.log');
+  check('busy port: fallback port comes up', await waitPort(fallbackPort, true, 90000));
+  check('busy port: the dummy still owns the original port', await portOpen(port));
+  const fb = await tryClient(token, fallbackPort);
+  check('busy port: a client connects on the fallback port', !!fb.hello, JSON.stringify(fb.closeCode ?? fb.timeout ?? ''));
+  fb.ws?.close();
+  const busyText = fs.readFileSync(busyLog, 'utf8');
+  check('busy port: retried the same port before falling back (log)',
+    /port 47310 is in use \(attempt 4\/4\)/.test(busyText) && busyText.includes(`using ${fallbackPort} instead`));
+  const busyTitle = windowTitle(child);
+  check('busy port: window title advertises the bound port',
+    process.platform !== 'win32' || new RegExp(` Remote \\d+\\.\\d+\\.\\d+\\.\\d+:${fallbackPort}/${token}`).test(busyTitle), busyTitle);
+  const busyPanel = await openPanel();
+  const busyStatus = await busyPanel.panel.evaluate('remotePanel.getStatus()');
+  check('busy port: pairing URL, connect string and status use the bound port',
+    busyStatus.port === fallbackPort && busyStatus.requestedPort === port &&
+    busyStatus.url.includes(`:${fallbackPort}&t=`) && busyStatus.connectString.includes(`:${fallbackPort}/`) &&
+    busyStatus.addresses.every((a) => a.url.includes(`:${fallbackPort}&t=`)),
+    JSON.stringify({ port: busyStatus.port, url: busyStatus.url }));
+  const busyDom = await busyPanel.panel.evaluate(`document.getElementById('status').textContent`);
+  check('busy port: the Remote Control window shows the actual port', busyDom.includes(`port ${fallbackPort}`), busyDom);
+  await screenshot(busyPanel.panel, 'panel-fallback.png');
+  busyPanel.panel.close();
+  const main4 = await mainWindowSession(cdpPort);
+  icon = await waitIcon(main4, { state: 'listening' });
+  check('busy port: header icon tooltip shows the bound port', icon.title.includes(`port ${fallbackPort}`), icon.title);
+  main4.close();
+  await closeServer(dummy);
+  dummy = null;
+  await stop(child);
+
+  // ---- phase 5: the port is released while retrying -> the same port is used
+  dummy = await occupy(port);
+  child = launch('port-retry', { forced: true });
+  const retryLog = path.join(logDir, 'app-port-retry.log');
+  check('retry: first attempt hit the busy port', await waitLog(retryLog, /port 47310 is in use \(attempt 1\/4\)/));
+  await closeServer(dummy);
+  dummy = null;
+  check('retry: the original port is taken once released', await waitPort(port, true, 15000));
+  check('retry: no fallback was used', !(await portOpen(fallbackPort)));
+  await stop(child);
 } catch (error) {
   console.log('RUN ERROR:', error.stack || error.message);
   check('run completed', false, error.message);
 } finally {
   started.forEach(killTree);
+  try { dummy?.close(); } catch (_) { /* ignore */ }
 }
 const failed = results.filter((r) => !r.ok);
 console.log(`\nRUN SUMMARY: ${results.length - failed.length}/${results.length} launcher checks passed`);

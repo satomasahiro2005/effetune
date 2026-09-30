@@ -9,6 +9,7 @@ import {
 } from '../utils/serialization-utils.js';
 import { identifySingleIr } from '../ir-library/ir-library-id.js';
 import { isSupportedIrFileName } from '../ir-library/audio-header-metadata.js';
+import { initRemoteControlButton } from './remote-control-button.js';
 
 const STATE_MIN_INTERVAL_MS = 100;
 const SAFETY_POLL_MS = 1000;
@@ -67,6 +68,7 @@ class RemoteControl {
         // The server can be switched on and off at runtime (Settings > Remote Control).
         this.disposeStatusListener = this.api.onStatus?.(next => this.setActive(next?.enabled === true)) || null;
         this.installHooks();
+        try { this.disposeButton = initRemoteControlButton(this.api, this.win.document); } catch (_) { /* icon is optional */ }
         this.win.addEventListener('pagehide', () => {
             this.api.rendererUnavailable().catch(() => {});
         }, { once: true });
