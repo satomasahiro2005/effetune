@@ -831,7 +831,7 @@ test('IPC handlers manage stable-ID menu state, tray presets, and default menu c
         {
           id: 'menu.settings',
           submenu: [
-            'settings.config', 'settings.audioDevices',
+            'settings.config', 'settings.remoteControl', 'settings.audioDevices',
             'settings.performanceBenchmark', 'settings.frequencyResponseMeasurement'
           ]
         },
@@ -867,7 +867,7 @@ test('IPC handlers manage stable-ID menu state, tray presets, and default menu c
       'view.effectPipeline', 'view.musicLibrary', 'view.visualizer', 'view.pipelineAnalyzer',
       'toggle-fullscreen', 'view.miniPlayer',
       'menu.settings',
-      'settings.config', 'settings.audioDevices', 'settings.performanceBenchmark',
+      'settings.config', 'settings.remoteControl', 'settings.audioDevices', 'settings.performanceBenchmark',
       'settings.frequencyResponseMeasurement',
       'menu.help',
       'help.help', 'help.discord', 'help.support', 'help.about'
