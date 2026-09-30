@@ -20,7 +20,6 @@ export function describeRemoteState(status) {
 
 export function initRemoteControlButton(api, doc = document) {
     const button = doc.getElementById('remoteControlButton');
-    const group = doc.getElementById('remoteControlGroup');
     const badge = doc.getElementById('remoteControlBadge');
     if (!api || !button || typeof api.openPanel !== 'function') return null;
 
@@ -37,7 +36,7 @@ export function initRemoteControlButton(api, doc = document) {
 
     const onClick = () => { api.openPanel().catch(() => {}); };
     button.addEventListener('click', onClick);
-    if (group) group.hidden = false;
+    button.hidden = false;
     render(null);
     const dispose = api.onStatus?.(render) || null;
     api.getStatus?.().then(render).catch(() => {});

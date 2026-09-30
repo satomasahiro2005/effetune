@@ -144,12 +144,11 @@ async function screenshot(panel, file) {
 async function readIcon(session) {
   return session.evaluate(`(() => {
     const b = document.getElementById('remoteControlButton');
-    const g = document.getElementById('remoteControlGroup');
     const badge = document.getElementById('remoteControlBadge');
     const r = b.getBoundingClientRect();
     const sib = document.getElementById('shareButton').getBoundingClientRect();
     return { state: b.dataset.state, title: b.title, badge: badge.hidden ? '' : badge.textContent,
-      visible: !g.hidden && r.width > 0, inHeader: !!b.closest('.pipeline-header'),
+      visible: !b.hidden && r.width > 0, inHeader: !!b.closest('.pipeline-header'),
       height: Math.round(r.height), shareHeight: Math.round(sib.height) };
   })()`);
 }

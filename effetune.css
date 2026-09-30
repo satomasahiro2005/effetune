@@ -948,8 +948,16 @@ body.layout-mobile #pipelineStats {
 
 .pipeline-preset-button,
 .share-button,
-.remote-control-button,
 .pipeline-analyzer-button {
+    height: 24px;
+    padding: 4px 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Remote Control (fork): same size as the neighbouring Share button. */
+.remote-control-button {
     height: 24px;
     padding: 4px 8px;
     display: flex;
@@ -964,6 +972,7 @@ body.layout-mobile #pipelineStats {
 }
 
 .pipeline-toolbar-group[hidden],
+.remote-control-button[hidden],
 .remote-control-badge[hidden] {
     display: none;
 }
