@@ -1193,14 +1193,8 @@ function createSplashScreen() {
       // Replace the audio-only renderer with the application document.
       mainWindow.loadFile('effetune.html');
       
-      // Check for updates after the application document loads if enabled in config
-      setTimeout(() => {
-        const cfg = constants.getAppConfig();
-        // fork: updates disabled so an official release does not replace this build
-        if (false && cfg && cfg.checkForUpdatesOnStartup !== false) {
-          checkForUpdates();
-        }
-      }, 1000);
+      // fork: updates disabled so an official release does not replace this build.
+      // The upstream startup check (config checkForUpdatesOnStartup) is intentionally not scheduled.
       
       // Clean up temporary splash file
       try {

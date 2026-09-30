@@ -1,4 +1,4 @@
-self.EFFECTUNE_CACHE_VERSION = "effetune-v2.11.0-7a09ec36a3660bfb";
+self.EFFECTUNE_CACHE_VERSION = "effetune-v2.11.0-f6b3120276e8731d";
 self.EFFECTUNE_PRECACHE_URLS = [
   "./effetune-library.css",
   "./effetune-mobile.css",
@@ -179,6 +179,10 @@ self.EFFECTUNE_PRECACHE_URLS = [
   "./js/plugin-manager.js",
   "./js/preset-manager.js",
   "./js/release-version.mjs",
+  "./js/remote/remote-control-button.js",
+  "./js/remote/remote-control.js",
+  "./js/remote/remote-overlay.js",
+  "./js/remote/remote-telemetry.js",
   "./js/room-eq/design-core.js",
   "./js/room-eq/design-worker.js",
   "./js/room-eq/designer.js",
