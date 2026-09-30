@@ -60,3 +60,8 @@ CLAUDE.md
 .qodo
 .npm-cache/
 .worktrees/
+
+# PoC remote-control logs
+.poc-logs/
+.npm-install.log
+.electron-install.log

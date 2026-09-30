@@ -36,6 +36,7 @@ const {
   createOpenHomeControlHost,
   registerOpenHomeIpc
 } = require('./openhome-control-host.cjs');
+const { RemoteControlHost, registerRemoteControlIpc } = require('./remote-control-host.cjs');
 const releaseVersionModulePromise = import(pathToFileURL(
   path.join(__dirname, '../js/release-version.mjs')
 ).href);
@@ -105,6 +106,8 @@ let disposeLibraryCatalogRecoveryIpc = null;
 let libraryCatalogClosePromise = null;
 let openHomeControlHost = null;
 let disposeOpenHomeIpc = null;
+let remoteControlHost = null;
+let disposeRemoteControlIpc = null;
 let disposePowerMonitorEvents = null;
 let appServicesClosePromise = null;
 
@@ -229,9 +232,14 @@ async function closeApplicationServices() {
   disposeOpenHomeIpc = null;
   const openHomeHost = openHomeControlHost;
   openHomeControlHost = null;
+  disposeRemoteControlIpc?.();
+  disposeRemoteControlIpc = null;
+  const remoteHost = remoteControlHost;
+  remoteControlHost = null;
   appServicesClosePromise = Promise.all([
     closeLibraryCatalogRecovery(),
-    openHomeHost?.dispose()
+    openHomeHost?.dispose(),
+    remoteHost?.dispose()
   ]);
   return appServicesClosePromise;
 }
@@ -505,6 +513,7 @@ function createWindow() {
   constants.setMainWindow(mainWindow);
   ipcHandlers.setMainWindow(mainWindow);
   fileHandlers.setMainWindow(mainWindow);
+  remoteControlHost?.attachWindow(mainWindow);
 
   // Allow renderer to access microphone via getUserMedia on file:// origin.
   // Without both handlers, Chromium falls back to its default content-settings
@@ -525,10 +534,12 @@ function createWindow() {
       ipcHandlers.restoreNormalWindowShape?.();
       disarmRendererWatchdog(`navigation:${url}`);
       void openHomeControlHost?.setRendererUnavailable();
+      remoteControlHost?.setRendererUnavailable();
     }
   });
   mainWindow.webContents.on('render-process-gone', () => {
     void openHomeControlHost?.setRendererUnavailable();
+    remoteControlHost?.setRendererUnavailable();
   });
 
   // Register keyboard shortcuts
@@ -1381,6 +1392,20 @@ async function initializeApp() {
     host: openHomeControlHost,
     getMainWindow: () => constants.getMainWindow()
   });
+
+  // PoC LAN remote control (remote-v1). IPC is always registered so the renderer
+  // can ask; the server only starts with EFFETUNE_REMOTE=1 or --remote.
+  remoteControlHost = new RemoteControlHost({
+    app,
+    getMainWindow: () => constants.getMainWindow(),
+    log: (...args) => console.log(...args)
+  });
+  disposeRemoteControlIpc = registerRemoteControlIpc({
+    ipcMain,
+    getHost: () => (remoteControlHost && remoteControlHost.enabled ? remoteControlHost : null),
+    getMainWindow: () => constants.getMainWindow()
+  });
+  remoteControlHost.start();
 
   // Every normal launch uses a sacrificial audio-only renderer. Auto-restarts
   // skip it so their startup-grace clock is not reset by a second navigation.

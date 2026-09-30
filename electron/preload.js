@@ -166,6 +166,17 @@ const openHomeV1 = Object.freeze({
   onStatus: callback => addSingleArgIpcListener('openhome-v1:status', callback)
 });
 
+// PoC LAN remote control (remote-v1). The WebSocket server lives in main; the
+// renderer only answers operations and publishes pipeline snapshots.
+const remoteV1 = Object.freeze({
+  apiVersion: 1,
+  rendererReady: () => ipcRenderer.invoke('remote-v1:renderer-ready', {}),
+  rendererUnavailable: () => ipcRenderer.invoke('remote-v1:renderer-unavailable', {}),
+  respond: response => ipcRenderer.invoke('remote-v1:response', response),
+  publishState: snapshot => ipcRenderer.invoke('remote-v1:state', snapshot),
+  onRequest: callback => addSingleArgIpcListener('remote-v1:request', callback)
+});
+
 function withoutOpenHomeOwnedConfig(config) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) return config;
   const {
@@ -283,6 +294,8 @@ contextBridge.exposeInMainWorld(
 
     // Versioned OpenHome bridge exposes only bounded player actions and state snapshots.
     openHomeV1,
+
+    remoteV1,
     
     openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
     openExternal: (url) => ipcRenderer.invoke('open-external-url', url),
