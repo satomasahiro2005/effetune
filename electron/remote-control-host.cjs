@@ -176,6 +176,7 @@ class RemoteControlHost {
     this.attachedWindows = new WeakSet();
     this.panelWindow = null;
     this.disposed = false;
+    this.toggleQueue = Promise.resolve();
     activeHost = this;
   }
 
@@ -205,13 +206,19 @@ class RemoteControlHost {
     return token;
   }
 
-  async setEnabled(enabled) {
+  // Toggles run one after another: an "on" that arrived while an "off" was
+  // still waiting for the listen to finish would otherwise be swallowed.
+  setEnabled(enabled) {
     enabled = enabled === true;
-    this.saveConfigPatch({ remoteControlEnabled: enabled });
-    this.enabled = enabled;
-    if (enabled) await this.start();
-    else await this.stop();
-    return this.getStatus();
+    const run = this.toggleQueue.then(async () => {
+      this.saveConfigPatch({ remoteControlEnabled: enabled });
+      this.enabled = enabled;
+      if (enabled) await this.start();
+      else await this.stop();
+      return this.getStatus();
+    });
+    this.toggleQueue = run.catch(() => {});
+    return run;
   }
 
   async regenerateToken() {
@@ -388,6 +395,8 @@ class RemoteControlHost {
     this.pendingOrigin = null;
     const wasRunning = !!this.connectString;
     this.connectString = null;
+    // A failed listen is not an error once the switch is off.
+    if (!this.enabled || reason === 'shutdown') this.listenError = null;
     if (wasRunning) this.log(`[remote] stopped (${reason})`);
     this.stopPromise = this.closeServer(server, wss, { closeCode: 1001, reason });
     await this.stopPromise;

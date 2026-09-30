@@ -107,7 +107,9 @@ When one push covers changes of several origins, it is `"local"` if any of them 
 and it carries no `seq` if they came from different clients. A client can therefore follow
 the computer by applying every push that does not carry one of its own `seq` values.
 
-Replies to `hello` and `get` carry the request's `seq` and `"origin":"remote"`.
+Replies to `hello` and `get` carry the request's `seq` and `"origin":"remote"`. They are
+snapshots, not echoes of an edit: always apply them. A command that leaves the pipeline as it
+was produces no push, so do not wait for one to confirm a command; the ack does that.
 
 ## IR transfer
 

@@ -202,6 +202,10 @@ try {
   // Toggle on again.
   status = await panel.evaluate('remotePanel.setEnabled(true)');
   check('toggle on listens again', status.running === true && await waitPort(port, true, 5000));
+  // Off and on sent back to back: the later "on" must win.
+  const rapid = await panel.evaluate('Promise.all([remotePanel.setEnabled(false), remotePanel.setEnabled(true)]).then(r => r[1])');
+  check('rapid off+on ends running', rapid.running === true && rapid.enabled === true &&
+    await waitPort(port, true, 5000) && readConfig().remoteControlEnabled === true, JSON.stringify({ running: rapid.running, enabled: rapid.enabled }));
   const c2 = await tryClient(token);
   check('client connects after toggling on', !!c2.hello);
 
