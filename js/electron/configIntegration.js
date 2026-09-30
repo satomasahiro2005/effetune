@@ -84,7 +84,8 @@ export async function showConfigDialog(isElectron, currentConfig) {
           <label for="tray" id="config-tray-label"></label>
         </div>
       </div>
-      <div class="device-section">
+      <!-- fork: updates disabled so an official release does not replace this build -->
+      <div class="device-section" hidden style="display:none">
         <div class="checkbox-container">
           <input type="checkbox" id="check-updates" ${config.checkForUpdatesOnStartup !== false ? 'checked' : ''}>
           <label for="check-updates" id="config-check-updates-label"></label>

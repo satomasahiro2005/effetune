@@ -955,6 +955,10 @@ function fetchReleases() {
 
 // Check for updates from GitHub
 async function checkForUpdates() {
+  // fork: updates disabled so an official release does not replace this build
+  console.log('[fork] updates disabled');
+  return;
+  // eslint-disable-next-line no-unreachable
   try {
     const releases = await fetchReleases();
 
@@ -1192,7 +1196,8 @@ function createSplashScreen() {
       // Check for updates after the application document loads if enabled in config
       setTimeout(() => {
         const cfg = constants.getAppConfig();
-        if (cfg && cfg.checkForUpdatesOnStartup !== false) {
+        // fork: updates disabled so an official release does not replace this build
+        if (false && cfg && cfg.checkForUpdatesOnStartup !== false) {
           checkForUpdates();
         }
       }, 1000);
