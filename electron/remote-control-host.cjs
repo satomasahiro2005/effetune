@@ -28,6 +28,9 @@ const REQUEST_TIMEOUT_MS = 10000;
 const MAX_PENDING_REQUESTS = 32;
 const STATE_MIN_INTERVAL_MS = 100; // <= 10 Hz
 const PING_INTERVAL_MS = 15000;
+const RENDERER_WAIT_MS = 20000; // hold early requests until the renderer finishes startup
+const SHUTDOWN_GRACE_MS = 300;  // do not let an unresponsive client delay quit
+const MAX_CLIENTS = 16;
 const CLOSE_UNAUTHORIZED = 4401;
 const PROTOCOL_VERSION = 1;
 const CLIENT_OPS = new Set([
@@ -71,6 +74,7 @@ class RemoteControlHost {
     this.wss = null;
     this.pingTimer = null;
     this.rendererReady = false;
+    this.readyWaiters = new Set();
     this.pending = new Map();
     this.requestSeq = 0;
     this.dispatchChain = Promise.resolve();
@@ -91,7 +95,8 @@ class RemoteControlHost {
   start() {
     if (!this.enabled || this.server) return;
     const lan = pickLanAddress();
-    this.connectString = `${lan.best}:${this.port}/${this.token}`;
+    // Only advertise the connect string once the port is actually bound.
+    const connectString = `${lan.best}:${this.port}/${this.token}`;
 
     this.server = http.createServer((req, res) => {
       res.writeHead(426, { 'Content-Type': 'text/plain' });
@@ -104,6 +109,8 @@ class RemoteControlHost {
       this.log(`[remote] server error: ${error.code || ''} ${error.message}`);
     });
     this.server.listen(this.port, '0.0.0.0', () => {
+      if (this.disposed) return;
+      this.connectString = connectString;
       this.log(`[remote] listening on 0.0.0.0:${this.port}`);
       this.log(`[remote] CONNECT STRING: ${this.connectString}`);
       if (lan.candidates.length > 1) {
@@ -150,7 +157,22 @@ class RemoteControlHost {
 
   setRendererReady() {
     this.rendererReady = true;
+    for (const waiter of [...this.readyWaiters]) waiter(true);
     return this.getStatus();
+  }
+
+  waitForRenderer(ms = RENDERER_WAIT_MS) {
+    if (this.rendererReady) return Promise.resolve(true);
+    if (this.disposed) return Promise.resolve(false);
+    return new Promise(resolve => {
+      const waiter = ok => {
+        clearTimeout(timer);
+        this.readyWaiters.delete(waiter);
+        resolve(ok);
+      };
+      const timer = setTimeout(() => waiter(false), ms);
+      this.readyWaiters.add(waiter);
+    });
   }
 
   setRendererUnavailable() {
@@ -178,13 +200,18 @@ class RemoteControlHost {
     return true;
   }
 
-  request(message) {
+  async request(message) {
+    // Clients that connect during startup or a window reload wait for the
+    // renderer instead of failing immediately.
+    if (!this.rendererReady && !(await this.waitForRenderer())) {
+      return { ok: false, error: 'renderer-unavailable' };
+    }
     const win = this.getMainWindow();
     if (!this.rendererReady || !win?.webContents || win.isDestroyed?.()) {
-      return Promise.resolve({ ok: false, error: 'renderer-unavailable' });
+      return { ok: false, error: 'renderer-unavailable' };
     }
     if (this.pending.size >= MAX_PENDING_REQUESTS) {
-      return Promise.resolve({ ok: false, error: 'busy' });
+      return { ok: false, error: 'busy' };
     }
     const requestId = `r${++this.requestSeq}`;
     return new Promise(resolve => {
@@ -272,6 +299,12 @@ class RemoteControlHost {
       ws.close(CLOSE_UNAUTHORIZED, 'unauthorized');
       return;
     }
+    let authenticatedCount = 0;
+    for (const client of this.wss.clients) if (client.authenticated) authenticatedCount += 1;
+    if (authenticatedCount >= MAX_CLIENTS) {
+      ws.close(1013, 'too many clients');
+      return;
+    }
     ws.authenticated = true;
     ws.isAlive = true;
     this.log(`[remote] client connected: ${req.socket.remoteAddress}`);
@@ -352,12 +385,23 @@ class RemoteControlHost {
     clearInterval(this.pingTimer);
     clearTimeout(this.broadcastTimer);
     this.setRendererUnavailable();
+    for (const waiter of [...this.readyWaiters]) waiter(false);
     return new Promise(resolve => {
       if (!this.wss) { resolve(); return; }
-      for (const ws of this.wss.clients) {
+      const clients = [...this.wss.clients];
+      for (const ws of clients) {
         try { ws.close(1001, 'shutdown'); } catch (_) { /* ignore */ }
       }
+      // wss.close() waits for every client's close handshake (up to 30 s in
+      // ws); terminate stragglers so quit is not held up by a sleeping phone.
+      const graceTimer = setTimeout(() => {
+        for (const ws of clients) {
+          try { ws.terminate(); } catch (_) { /* ignore */ }
+        }
+      }, SHUTDOWN_GRACE_MS);
+      graceTimer.unref?.();
       this.wss.close(() => {
+        clearTimeout(graceTimer);
         if (this.server) this.server.close(() => resolve());
         else resolve();
         this.server?.closeAllConnections?.();

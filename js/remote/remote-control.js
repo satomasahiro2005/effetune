@@ -11,6 +11,7 @@ import {
 const STATE_MIN_INTERVAL_MS = 100;
 const SAFETY_POLL_MS = 1000;
 const HISTORY_SAVE_DEBOUNCE_MS = 1000;
+const MAX_CHAIN_ITEMS = 256;
 
 export async function startRemoteControl(win = window) {
     const api = win.electronAPI?.remoteV1;
@@ -173,6 +174,7 @@ class RemoteControl {
         const { audioManager, pipelineManager, pluginManager } = this.requireApp();
         const items = msg.pipeline;
         if (!Array.isArray(items)) throw new Error('pipeline must be an array');
+        if (items.length > MAX_CHAIN_ITEMS) throw new Error('pipeline too long');
         for (const [i, item] of items.entries()) {
             if (!item || typeof item !== 'object' || typeof item.nm !== 'string') {
                 throw new Error('invalid item at ' + i);
@@ -245,7 +247,11 @@ class RemoteControl {
 
     async opListPresets() {
         const { pipelineManager } = this.requireApp();
-        const presets = await pipelineManager.presetManager.getPresets();
+        // Same list the preset combo box shows: hide presets whose effects are missing.
+        const presetManager = pipelineManager.presetManager;
+        const presets = typeof presetManager.getLoadablePresets === 'function'
+            ? await presetManager.getLoadablePresets()
+            : await presetManager.getPresets();
         return { names: Object.keys(presets || {}) };
     }
 
