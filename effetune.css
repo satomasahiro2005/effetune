@@ -972,9 +972,14 @@ body.layout-mobile #pipelineStats {
     opacity: 0.5;
 }
 
+/* On (listening or connected) looks like the app's other "on" buttons
+   (.tab-button.active, .player-button[data-active="true"]): filled with the accent. */
 .remote-control-button[data-state="listening"],
 .remote-control-button[data-state="connected"] {
-    color: var(--et-accent);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--et-accent) 95%, transparent), var(--et-accent-pressed));
+    border-color: var(--et-accent-hover);
+    color: var(--et-on-accent);
+    box-shadow: 0 5px 16px color-mix(in srgb, var(--et-accent) 24%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 .remote-control-button[data-state="error"] {
@@ -990,8 +995,8 @@ body.layout-mobile #pipelineStats {
     padding: 0 3px;
     box-sizing: border-box;
     border-radius: 7px;
-    background-color: var(--et-accent);
-    color: var(--et-surface-10);
+    background-color: var(--et-on-accent);
+    color: var(--et-accent-pressed);
     font-size: 10px;
     font-weight: bold;
     line-height: 14px;
