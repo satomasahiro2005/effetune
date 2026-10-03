@@ -21,6 +21,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { WebSocketServer } = require('ws');
+const { createStaticHandler, isAllowedHost, isAllowedOrigin } = require('./remote-static-server.cjs');
 
 const CHANNELS = Object.freeze({
   rendererReady: 'remote-v1:renderer-ready',
@@ -64,6 +65,9 @@ const IR_MAX_BYTES = 64 * 1024 * 1024;
 const IR_MAX_CHUNKS = Math.ceil(IR_MAX_BYTES / IR_CHUNK_BYTES);
 const MAX_UPLOADS_PER_CLIENT = 2;
 const SEND_HIGH_WATER_BYTES = 8 * 1024 * 1024;
+const STATE_HIGH_WATER_BYTES = 1024 * 1024; // a slower client than this misses pushes and gets the latest later
+const STATE_DRAIN_BYTES = 64 * 1024;
+const STATE_DIRTY_CHECK_MS = 250;
 const IR_ID_PATTERN = /^[a-f0-9]{24}$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
 const FEATURES = Object.freeze(['origin', 'savePreset', 'irSync', 'telemetry', 'overlays']);
@@ -207,6 +211,7 @@ class RemoteControlHost {
     this.server = null;
     this.wss = null;
     this.pingTimer = null;
+    this.dirtyTimer = null;
     this.startPromise = null;
     this.stopPromise = null;
     this.listenError = null;
@@ -378,11 +383,35 @@ class RemoteControlHost {
     this.lan = lan;
     this.listenError = null;
     this.port = this.basePort;
-    const server = http.createServer((req, res) => {
-      res.writeHead(426, { 'Content-Type': 'text/plain' });
-      res.end('EffeTune remote-v1: WebSocket only\n');
+    // Plain http on the same port serves the browser client (remote.html).
+    const staticHandler = createStaticHandler({
+      root: path.resolve(__dirname, '..'),
+      log: (...args) => this.log(...args)
     });
-    const wss = new WebSocketServer({ server, maxPayload: MAX_WS_BYTES });
+    const server = http.createServer((req, res) => {
+      try {
+        staticHandler(req, res);
+      } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Error\n');
+      }
+    });
+    const wss = new WebSocketServer({
+      server,
+      maxPayload: MAX_WS_BYTES,
+      // Browsers attach Origin: refuse pages that are not this server itself.
+      // Non-browser clients (EffectDeck, scripts) send no Origin.
+      verifyClient: (info, done) => {
+        const { headers } = info.req;
+        const ok = isAllowedHost(headers.host) && isAllowedOrigin(headers.origin, headers.host);
+        if (ok) {
+          done(true);
+        } else {
+          this.log(`[remote] refused upgrade from ${info.req.socket.remoteAddress} (host/origin)`);
+          done(false, 403, 'Forbidden');
+        }
+      }
+    });
     this.server = server;
     this.wss = wss;
     wss.on('connection', (ws, req) => this.onConnection(ws, req));
@@ -395,6 +424,8 @@ class RemoteControlHost {
       }
     }, PING_INTERVAL_MS);
     this.pingTimer.unref?.();
+    this.dirtyTimer = setInterval(() => this.flushDirtyClients(), STATE_DIRTY_CHECK_MS);
+    this.dirtyTimer.unref?.();
     return this.bindWithFallback(server).then(port => {
       if (this.disposed || this.server !== server) return false;
       if (port === null) {
@@ -403,6 +434,8 @@ class RemoteControlHost {
         if (this.server === server) { this.server = null; this.wss = null; }
         clearInterval(this.pingTimer);
         this.pingTimer = null;
+        clearInterval(this.dirtyTimer);
+        this.dirtyTimer = null;
         this.startPromise = null;
         this.emitStatus();
         return false;
@@ -520,6 +553,8 @@ class RemoteControlHost {
     this.wss = null;
     clearInterval(this.pingTimer);
     this.pingTimer = null;
+    clearInterval(this.dirtyTimer);
+    this.dirtyTimer = null;
     clearTimeout(this.broadcastTimer);
     this.broadcastTimer = null;
     this.pendingOrigin = null;
@@ -776,6 +811,12 @@ class RemoteControlHost {
     const plain = JSON.stringify(base);
     for (const ws of this.wss.clients) {
       if (!ws.authenticated || ws.readyState !== 1) continue;
+      // A client that cannot keep up skips this push and gets the latest state
+      // once it has drained (flushDirtyClients); full states supersede each other.
+      if (ws.bufferedAmount > STATE_HIGH_WATER_BYTES) {
+        ws.stateDirty = true;
+        continue;
+      }
       // seq only goes to the client that sent the command; for everyone else
       // the change is external.
       if (!origin.local && origin.ws === ws && origin.seq !== undefined) {
@@ -783,6 +824,19 @@ class RemoteControlHost {
       } else {
         ws.send(plain);
       }
+      ws.stateDirty = false;
+    }
+  }
+
+  flushDirtyClients() {
+    if (!this.wss) return;
+    let plain = null;
+    for (const ws of this.wss.clients) {
+      if (!ws.stateDirty || !ws.authenticated || ws.readyState !== 1) continue;
+      if (ws.bufferedAmount > STATE_DRAIN_BYTES) continue;
+      ws.stateDirty = false;
+      plain = plain || JSON.stringify(this.stateMessage({ origin: 'remote' }));
+      ws.send(plain);
     }
   }
 
