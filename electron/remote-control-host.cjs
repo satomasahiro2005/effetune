@@ -98,6 +98,36 @@ function resolveBuild(app) {
     return fs.statSync(appPath).mtime.toISOString().slice(0, 10);
   } catch (_) { return null; }
 }
+// Version of the DSP library (dsp/) this app was built from, reported in the hello reply so a
+// client can tell when its own build differs: injected `effetuneDsp` in package.json, else the
+// dsp/ package version (unpackaged only: dsp/ is not part of the packaged app), else null.
+function resolveDspVersion(app) {
+  let appPath = '';
+  try { appPath = app.getAppPath(); } catch (_) { return null; }
+  const pattern = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
+  const candidates = [
+    [path.join(appPath, 'package.json'), 'effetuneDsp'],
+    [path.join(appPath, 'dsp', 'bindings', 'js', 'package.json'), 'version']
+  ];
+  for (const [file, key] of candidates) {
+    try {
+      const value = cleanClientText(JSON.parse(fs.readFileSync(file, 'utf8'))?.[key]);
+      if (value && pattern.test(value)) return value;
+    } catch (_) { /* try the next source */ }
+  }
+  return null;
+}
+// Names of the effects (nm) this app can load, as the renderer reports them; sorted, bounded.
+function cleanEffectNames(value) {
+  if (!Array.isArray(value)) return null;
+  const names = [];
+  for (const item of value) {
+    const name = cleanClientText(item);
+    if (name) names.push(name);
+    if (names.length >= 1024) break;
+  }
+  return names.length > 0 ? [...new Set(names)].sort() : null;
+}
 const CLIENT_OPS = new Set([
   'hello', 'get', 'chain', 'params', 'bypass', 'listPresets', 'getPreset',
   'savePreset', 'listIRs', 'getIR', 'putIR', 'telemetry'
@@ -193,6 +223,7 @@ class RemoteControlHost {
   }) {
     this.app = app;
     this.build = resolveBuild(app);
+    this.dsp = resolveDspVersion(app);
     this.getMainWindow = getMainWindow;
     this.config = config;
     this.log = log;
@@ -896,6 +927,8 @@ class RemoteControlHost {
           features: FEATURES,
           appName: APP_NAME,
           ...(this.build ? { build: this.build } : {}),
+          ...(this.dsp ? { dsp: this.dsp } : {}),
+          ...(cleanEffectNames(result.effects) ? { effects: cleanEffectNames(result.effects) } : {}),
           ...seqField
         }));
         break;

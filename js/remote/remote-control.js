@@ -185,6 +185,8 @@ class RemoteControl {
     async execute(msg) {
         switch (msg.op) {
             case 'hello':
+                // The effects this app can load (nm), so a client can tell what it must not send.
+                return { effects: Object.keys(this.win.pluginManager?.pluginClasses || {}) };
             case 'get':
                 return {};
             case 'chain':
