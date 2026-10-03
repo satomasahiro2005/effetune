@@ -276,8 +276,10 @@ another one: **Join another EffeTune** in the same window opens a client window 
   (`sw-precache.js`, without `effetune.html`, `sw.js`, `sw-precache.js` and `manifest.json`) are
   served; everything else, including `config.json` and the app's own `electron/` code, is 404.
   They are public application code, so they need no token; the WebSocket still does, unchanged.
-- `Host` header (static files and WebSocket upgrades): an IPv4 literal, `localhost`, `[ipv6]` or
-  `*.local`, optionally with a port. Anything else gets 403 (DNS-rebinding defence).
+- `Host` header (static files, and WebSocket upgrades that carry an `Origin`): an IPv4 literal,
+  `localhost`, `[ipv6]` or `*.local`, optionally with a port. Anything else gets 403 (DNS-rebinding
+  defence). A WebSocket upgrade without `Origin` is not a browser request, so its `Host` is not
+  checked: EffectDeck and scripts may connect through any host name (NetBIOS, Tailscale MagicDNS).
 - `Origin` header (WebSocket upgrade only): an `http:`/`https:` origin must be exactly
   `http://<Host>`. A missing `Origin` (EffectDeck, scripts) is accepted; `Origin: null` and other
   schemes get 403.

@@ -416,11 +416,12 @@ class RemoteControlHost {
     const wss = new WebSocketServer({
       server,
       maxPayload: MAX_WS_BYTES,
-      // Browsers attach Origin: refuse pages that are not this server itself.
-      // Non-browser clients (EffectDeck, scripts) send no Origin.
+      // Browsers always attach Origin to a WebSocket handshake: for those, require a literal/local
+      // Host (DNS-rebinding defence) and a same-origin page. Non-browser clients (EffectDeck,
+      // scripts) send no Origin and may use any host name (MagicDNS, NetBIOS, ...).
       verifyClient: (info, done) => {
-        const { headers } = info.req;
-        const ok = isAllowedHost(headers.host) && isAllowedOrigin(headers.origin, headers.host);
+        const { host, origin } = info.req.headers;
+        const ok = origin === undefined || (isAllowedHost(host) && isAllowedOrigin(origin, host));
         if (ok) {
           done(true);
         } else {

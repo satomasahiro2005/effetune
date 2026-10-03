@@ -184,9 +184,12 @@ function makeHost(port, token) {
   return { host, logs };
 }
 
-function connect(port, { origin, token = 'tok-static' } = {}) {
+function connect(port, { origin, hostHeader, token = 'tok-static' } = {}) {
   return new Promise(resolve => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/?t=${token}`, origin === undefined ? {} : { origin });
+    const options = {};
+    if (origin !== undefined) options.origin = origin;
+    if (hostHeader !== undefined) options.headers = { Host: hostHeader };
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/?t=${token}`, options);
     const closed = new Promise(done => ws.on('close', code => done(code)));
     ws.on('open', () => resolve({ ws, opened: true, closed }));
     ws.on('unexpected-response', (_req, res) => { resolve({ status: res.statusCode }); res.resume(); });
@@ -243,4 +246,22 @@ test('a client that cannot keep up misses pushes and receives the latest state o
   assert.equal('seq' in received[0], false);
   assert.equal(slow.stateDirty, false);
   host.wss = null;
+});
+
+test('upgrade applies the Host rule only to browser requests (those with an Origin)', async () => {
+  const port = 47391;
+  const { host } = makeHost(port, 'tok-static');
+  try {
+    assert.equal(await host.start(), true);
+    const hostHeader = `mypc:${port}`;
+    // EffectDeck-style: any host name the user typed, no Origin.
+    const native = await connect(port, { hostHeader });
+    assert.equal(native.opened, true);
+    native.ws.close();
+    // Browser-style: same Host name, but with an Origin -> DNS-rebinding defence applies.
+    const browser = await connect(port, { hostHeader, origin: `http://mypc:${port}` });
+    assert.equal(browser.status, 403);
+  } finally {
+    await host.dispose();
+  }
 });
