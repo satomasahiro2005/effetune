@@ -44,6 +44,7 @@ const PORT = 47300;
 const PORT_FALLBACK_COUNT = 9;      // 47301..47309 when 47300 stays busy
 const PORT_RETRY_ATTEMPTS = 4;      // a previous instance may still be releasing the port
 const PORT_RETRY_DELAY_MS = 750;
+const LISTEN_RETRY_MS = 15000;     // ports busy at boot: keep trying while the switch is on
 const MAX_WS_BYTES = 4 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10000;
 const IR_REQUEST_TIMEOUT_MS = 120000;
@@ -175,6 +176,8 @@ class RemoteControlHost {
     this.startPromise = null;
     this.stopPromise = null;
     this.listenError = null;
+    this.listenRetryTimer = null;
+    this.portsBusy = false;
     this.lan = null;
     this.rendererReady = false;
     this.readyWaiters = new Set();
@@ -330,6 +333,7 @@ class RemoteControlHost {
       this.startPromise = null;
       return false;
     }
+    this.clearListenRetry();
     const lan = pickLanAddress();
     this.lan = lan;
     this.listenError = null;
@@ -354,6 +358,7 @@ class RemoteControlHost {
     return this.bindWithFallback(server).then(port => {
       if (this.disposed || this.server !== server) return false;
       if (port === null) {
+        if (this.portsBusy) this.scheduleListenRetry();
         this.closeServer(server, wss);
         if (this.server === server) { this.server = null; this.wss = null; }
         clearInterval(this.pingTimer);
@@ -392,6 +397,7 @@ class RemoteControlHost {
       server.listen(port, '0.0.0.0');
     });
     const last = Math.min(this.basePort + PORT_FALLBACK_COUNT, 65535);
+    this.portsBusy = false;
     for (let port = this.basePort; port <= last; port += 1) {
       for (let attempt = 1; attempt <= PORT_RETRY_ATTEMPTS; attempt += 1) {
         if (!stillWanted()) return null;
@@ -417,7 +423,25 @@ class RemoteControlHost {
       }
     }
     this.listenError = `ports ${this.basePort}-${last} are all in use`;
+    this.portsBusy = true;
     return null;
+  }
+
+  // Whatever held the ports (seen right after Windows boot) usually lets go
+  // later, so a busy failure is retried instead of waiting for a manual toggle.
+  scheduleListenRetry() {
+    this.clearListenRetry();
+    if (!this.enabled || this.disposed) return;
+    this.listenRetryTimer = setTimeout(() => {
+      this.listenRetryTimer = null;
+      if (this.enabled && !this.disposed && !this.server && !this.startPromise) void this.start();
+    }, LISTEN_RETRY_MS);
+    this.listenRetryTimer.unref?.();
+  }
+
+  clearListenRetry() {
+    clearTimeout(this.listenRetryTimer);
+    this.listenRetryTimer = null;
   }
 
   closeServer(server, wss, { closeCode = 1001, reason = 'shutdown' } = {}) {
@@ -449,6 +473,7 @@ class RemoteControlHost {
       try { await this.startPromise; } catch (_) { /* ignore */ }
     }
     this.startPromise = null;
+    this.clearListenRetry();
     const server = this.server;
     const wss = this.wss;
     this.server = null;
