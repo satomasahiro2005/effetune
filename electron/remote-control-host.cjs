@@ -838,10 +838,13 @@ class RemoteControlHost {
     // content (a preset load) must still reach clients, because every id is new.
     const json = JSON.stringify(next);
     if (json === this.lastSnapshotJson) return false;
+    const baseline = this.lastSnapshotJson === null;
     this.lastSnapshotJson = json;
     this.snapshot = next;
     this.rev += 1;
-    this.mergePendingOrigin(this.resolveCause(cause));
+    // The session's first snapshot is a baseline, not anyone's change: it must not turn a client
+    // command coalesced with it into a "local" one. Broadcast alone it still reads as local.
+    if (!baseline) this.mergePendingOrigin(this.resolveCause(cause));
     this.scheduleBroadcast();
     return true;
   }

@@ -118,9 +118,6 @@ test('edit acks carry the host revision and skipped ops; stale epochs fail', asy
     const client = await open();
     client.send({ op: 'hello', v: 1, seq: 1, sync: 1 });
     await client.next(m => m.op === 'state' && m.seq === 1);
-    // The first snapshot counts as a local change and is broadcast on its own timer; an edit that
-    // arrives before that broadcast would be merged into it ("local", no seq).
-    await new Promise(resolve => setTimeout(resolve, 250));
     client.send({ op: 'edit', seq: 2, epoch: 'abcd0123', base: 1, ops: [{ t: 'set', id: 'h.1', p: { vl: -4 } }, { t: 'del', id: 'zz' }] });
     const ack = await client.next(m => m.op === 'ack' && m.seq === 2);
     assert.equal(ack.ok, true);
@@ -227,6 +224,33 @@ test('presets op replies with the stored presets', async () => {
   }
 });
 
+test('a command coalesced with the first snapshot of a session keeps its origin and seq', async () => {
+  const { host, renderer } = makeHost();
+  try {
+    await host.start();
+    host.setRendererReady();
+    const sender = await open();
+    const bystander = await open();
+    const baseline = renderer.snapshot();
+    const changed = renderer.snapshot();
+    changed.pipeline[0].vl = -3;
+    // Same tick: the first snapshot is still waiting for its broadcast when the command lands.
+    host.handleRendererState(baseline);
+    host.ingestSnapshot(changed, { ws: [...host.wss.clients][0], seq: 7 });
+    const sent = await sender.next(m => m.op === 'state');
+    const seen = await bystander.next(m => m.op === 'state');
+    assert.equal(sent.origin, 'remote');
+    assert.equal(sent.seq, 7);
+    assert.equal(sent.pipeline[0].vl, -3);
+    assert.equal(seen.origin, 'remote');
+    assert.equal('seq' in seen, false);
+    sender.ws.close();
+    bystander.ws.close();
+  } finally {
+    await host.dispose();
+  }
+});
+
 test('a client that was behind gets its own echo with its seq, but other changes without one', async () => {
   const { host } = makeHost();
   try {
@@ -238,7 +262,9 @@ test('a client that was behind gets its own echo with its seq, but other changes
     other.send({ op: 'hello', v: 1, seq: 1, sync: 1 });
     await client.next(m => m.op === 'state' && m.seq === 1);
     await other.next(m => m.op === 'state' && m.seq === 1);
-    await new Promise(resolve => setTimeout(resolve, 250)); // let the hello snapshots' own broadcast go out first
+    // The baseline snapshot is broadcast on its own timer; let it reach both clients before one stops draining.
+    await client.next(m => m.op === 'state' && !('seq' in m));
+    await other.next(m => m.op === 'state' && !('seq' in m));
     const sockets = [...host.wss.clients];
     assert.equal(sockets.length, 2);
     // Pretend the first socket is not draining.
