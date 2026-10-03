@@ -386,6 +386,8 @@ host waits for a pause of 400 ms before sending (at most 3 s while imports keep 
 folder import produces a few notices, not one per file. The notice also reaches the connection
 whose `putIR` caused it; re-listing then finds nothing new. Connections without `"sync":1` never
 receive it.
+A removal also sends it, so a client that uploads its own IRs should only send what was added on
+its side since its last listing: uploading everything the host lacks would undo the removal at once.
 
 ### Transport details
 
