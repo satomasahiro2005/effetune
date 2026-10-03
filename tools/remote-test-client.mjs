@@ -25,7 +25,13 @@ const cdpPort = Number(process.env.REMOTE_TEST_CDP) || 0;
 const inspectPort = Number(process.env.REMOTE_TEST_INSPECT) || 0;
 const onlyTelemetry = process.env.REMOTE_TEST_ONLY === 'telemetry';
 const onlyOverlay = process.env.REMOTE_TEST_ONLY === 'overlay';
-const logDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.poc-logs');
+const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const logDir = path.join(repoRoot, '.poc-logs');
+const readJson = (file) => JSON.parse(fs.readFileSync(path.join(repoRoot, file), 'utf8'));
+const appVersion = readJson('package.json').version;
+const dspVersion = readJson('dsp/bindings/js/package.json').version;
+// Effects added by upstream 2.12.0 (DSP 0.12.0); the hello list must carry them.
+const NEW_IN_2_12 = ['Analog Meter', 'Rhythm Analyzer', 'Tonal Balance EQ'];
 const CHUNK = 512 * 1024;
 
 const results = [];
@@ -152,8 +158,8 @@ async function waitIrReady(session, id, ms = 20000) {
 
 // ---- analyzer mirror ---------------------------------------------------------
 
-const ANALYZERS = new Set(['Chroma Spiral', 'Level Meter', 'Note Spectrogram', 'Oscilloscope',
-  'Pitch Meter', 'Spectrogram', 'Spectrum Analyzer', 'Stereo Meter']);
+const ANALYZERS = new Set(['Analog Meter', 'Chroma Spiral', 'Level Meter', 'Note Spectrogram', 'Oscilloscope',
+  'Pitch Meter', 'Rhythm Analyzer', 'Spectrogram', 'Spectrum Analyzer', 'Stereo Meter']);
 
 function decodeFrame(entry) {
   const bytes = Buffer.from(entry.data, 'base64');
@@ -667,8 +673,9 @@ async function main() {
 
   let { ack, data } = await call(ws, { op: 'hello', app: 'EffectDeck', v: 1 }, 'state');
   check('hello acked', ack.ok === true);
-  check('hello returned state (app 2.11.0)', data && data.op === 'state' && data.app === '2.11.0' &&
-    Array.isArray(data.pipeline) && typeof data.rev === 'number' && typeof data.masterBypass === 'boolean');
+  check(`hello returned state (app ${appVersion})`, data && data.op === 'state' && data.app === appVersion &&
+    Array.isArray(data.pipeline) && typeof data.rev === 'number' && typeof data.masterBypass === 'boolean',
+    String(data?.app));
   check('hello state carries origin and features', data && data.origin === 'remote' &&
     Array.isArray(data.features) && ['origin', 'savePreset', 'irSync', 'telemetry', 'overlays'].every((f) => data.features.includes(f)),
     JSON.stringify({ origin: data?.origin, features: data?.features }));
@@ -679,6 +686,11 @@ async function main() {
     data.effects.every((n, i, a) => typeof n === 'string' && (i === 0 || a[i - 1] <= n)) &&
     (data.dsp === undefined || /^\d+\.\d+\.\d+/.test(data.dsp)),
     JSON.stringify({ n: data?.effects?.length, dsp: data?.dsp }));
+  check(`hello effects include the 2.12 additions (${NEW_IN_2_12.join(', ')})`,
+    Array.isArray(data?.effects) && NEW_IN_2_12.every((n) => data.effects.includes(n)),
+    JSON.stringify(NEW_IN_2_12.filter((n) => !data?.effects?.includes(n))));
+  check(`hello dsp is the dsp/ package version (${dspVersion}) when run unpackaged`, data?.dsp === dspVersion,
+    String(data?.dsp));
   const initialRev = data.rev;
 
   ({ ack, data } = await call(ws, { op: 'hello', app: 'EffectDeck', v: 99 }));
