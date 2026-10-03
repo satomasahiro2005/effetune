@@ -735,12 +735,14 @@ async function main() {
       } finally {
         am.suppressMutations = false;
       }
-      return { count: names.length, failures };
+      return { count: names.length, failures, missing: ['Analog Meter', 'Rhythm Analyzer', 'Tonal Balance EQ'].filter((n) => !names.includes(n)) };
     });
     const allowlist = [/favicon/i];
     const newErrors = consoleErrors.slice(errorsBefore).filter((e) => !allowlist.some((re) => re.test(e)));
     check(`20 all ${outcome.count} plugins can be created, shown and deleted on a client`, outcome.failures.length === 0 && newErrors.length === 0,
       JSON.stringify({ failures: outcome.failures.slice(0, 5), errors: newErrors.slice(0, 5) }));
+    check('20 the client offers the effects added in 2.12 (Analog Meter, Rhythm Analyzer, Tonal Balance EQ)',
+      outcome.missing.length === 0, JSON.stringify(outcome.missing));
     await waitFor(() => sameAsHost(P1), 5000, 100);
   }
 
