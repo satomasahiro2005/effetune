@@ -171,8 +171,22 @@ function decodeFrame(entry) {
   return { ok: bytes.length === 16 + header.payloadBytes && header.type === entry.type, bytes, header };
 }
 
-// Collects the telemetry pushes that arrive on `ws` during the next `ms` milliseconds.
+// Collects the telemetry pushes that arrive on `ws` during the next `ms` milliseconds. A VM that freezes for
+// seconds (WSL2 does, about every 35 s on the owner's PC) stretches the window without any real slowdown of
+// the app, so a window in which this process saw its own event loop stall for over a second is measured again.
 async function collectTelemetry(ws, ms) {
+  for (let attempt = 1; ; attempt += 1) {
+    let last = Date.now();
+    let worst = 0;
+    const lag = setInterval(() => { const now = Date.now(); worst = Math.max(worst, now - last); last = now; }, 25);
+    const r = await collectTelemetryWindow(ws, ms);
+    clearInterval(lag);
+    if (worst <= 1000 || attempt >= 3) return r;
+    console.log(`MEASURE note: this machine froze for ${worst} ms during the window; measuring again`);
+  }
+}
+
+async function collectTelemetryWindow(ws, ms) {
   const start = ws.inbox.length;
   const t0 = Date.now();
   await sleep(ms);
@@ -352,10 +366,14 @@ async function telemetryTests(ws, ws2, session) {
       await main.evaluate(`(() => { ${win}.${how}(); return true; })()`);
       await sleep(1500);
       const g = await gate();
+      // Some Linux compositors (WSLg's Weston) ignore minimize(); then the window is not hidden at all
+      // and there is no hidden state to test, so the pushes alone are checked.
+      const honored = how !== 'minimize' || await main.evaluate(`${win}.isMinimized()`);
       r = await collectTelemetry(ws, 4000);
-      describeTelemetry(`15 fps, window ${label}`, r);
+      describeTelemetry(`15 fps, window ${label}${honored ? '' : ' (compositor ignored minimize())'}`, r);
       check(`telemetry: window ${label} (skip display DSP when hidden: ${g.skip}): pushes keep coming (>= 14/s, both analyzers)`,
-        g.hostHidden === true && r.rate >= 14 && r.perStage.size >= 2, `${r.rate.toFixed(2)}/s, gate ${JSON.stringify(g)}`);
+        (g.hostHidden === true || !honored) && r.rate >= 14 && r.perStage.size >= 2,
+        `${r.rate.toFixed(2)}/s, gate ${JSON.stringify(g)}${honored ? '' : ', minimize not honored by the compositor'}`);
       if (how === 'hide') {
         // Baseline: unsubscribed, the hidden window stops producing analyzer frames.
         await call(ws, { op: 'telemetry', on: false });

@@ -46,3 +46,14 @@ test('only a VPN adapter has a private address: it is still the best guess', () 
   const result = pick(iface('utun3', '10.8.0.6', ''), iface('en0', '169.254.9.9'));
   assert.equal(result.best, '10.8.0.6');
 });
+
+test('Linux: Incus bridge and NordLynx are skipped; WSL2 in NAT mode falls back to its only address', () => {
+  const result = pick(
+    iface('incusbr0', '10.85.239.1', '10:66:6a:00:00:01'),
+    iface('nordlynx', '10.5.0.2', ''),
+    iface('eth0', '192.168.1.4')
+  );
+  assert.deepEqual(result.offered.map(o => o.name), ['eth0']);
+  const nat = pick(iface('eth0', '172.24.80.5', '00:15:5d:aa:bb:cc'));
+  assert.equal(nat.best, '172.24.80.5');
+});

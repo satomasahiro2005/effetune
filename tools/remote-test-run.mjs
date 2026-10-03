@@ -20,9 +20,11 @@ const logDir = path.join(root, '.poc-logs');
 const userData = path.join(logDir, 'userdata');
 const configPath = path.join(userData, 'config.json');
 const token = 'poctoken';
-const port = 47310;
-const cdpPort = 9339;
-const inspectPort = 9340;
+// Ports can be moved (REMOTE_TEST_PORT, REMOTE_TEST_CDP_BASE) when another run shares the network stack,
+// e.g. Windows and WSL2 in mirrored networking mode.
+const port = Number(process.env.REMOTE_TEST_PORT) || 47310;
+const cdpPort = Number(process.env.REMOTE_TEST_CDP_BASE) || 9339;
+const inspectPort = cdpPort + 1;
 fs.mkdirSync(userData, { recursive: true });
 
 const results = [];
@@ -430,7 +432,7 @@ try {
   fb.ws?.close();
   const busyText = fs.readFileSync(busyLog, 'utf8');
   check('busy port: retried the same port before falling back (log)',
-    /port 47310 is in use \(attempt 4\/4\)/.test(busyText) && busyText.includes(`using ${fallbackPort} instead`));
+    new RegExp(`port ${port} is in use \\(attempt 4/4\\)`).test(busyText) && busyText.includes(`using ${fallbackPort} instead`));
   const busyTitle = windowTitle(child);
   check('busy port: window title does not carry the token or the port',
     process.platform !== 'win32' || (busyTitle !== '' && !busyTitle.includes(token) && !busyTitle.includes(`:${fallbackPort}`)), busyTitle);
@@ -459,7 +461,7 @@ try {
   dummy = await occupy(port);
   child = launch('port-retry', { forced: true });
   const retryLog = path.join(logDir, 'app-port-retry.log');
-  check('retry: first attempt hit the busy port', await waitLog(retryLog, /port 47310 is in use \(attempt 1\/4\)/));
+  check('retry: first attempt hit the busy port', await waitLog(retryLog, new RegExp(`port ${port} is in use \\(attempt 1/4\\)`)));
   await closeServer(dummy);
   dummy = null;
   check('retry: the original port is taken once released', await waitPort(port, true, 15000));

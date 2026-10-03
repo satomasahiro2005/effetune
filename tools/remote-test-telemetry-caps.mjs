@@ -195,14 +195,25 @@ for (const [fps, ws] of [[30, a], [7, b]]) {
   ws.times.length = 0;
 }
 {
-  const t0 = Date.now();
   let seq = 100;
-  await new Promise((resolve) => {
-    const feed = setInterval(() => {
-      host.handleRendererTelemetry([frame(0, 1, 16, seq++)]);
-      if (Date.now() - t0 >= 3000) { clearInterval(feed); resolve(); }
-    }, 5);
-  });
+  // A VM that freezes for seconds (WSL2 does) breaks the rates without any fault in the code: measure again.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    a.out.length = 0; a.times.length = 0; b.out.length = 0; b.times.length = 0;
+    const t0 = Date.now();
+    let last = t0;
+    let worst = 0;
+    await new Promise((resolve) => {
+      const feed = setInterval(() => {
+        const now = Date.now();
+        worst = Math.max(worst, now - last);
+        last = now;
+        host.handleRendererTelemetry([frame(0, 1, 16, seq++)]);
+        if (now - t0 >= 3000) { clearInterval(feed); resolve(); }
+      }, 5);
+    });
+    if (worst <= 1000) break;
+    console.log(`note: this machine froze for ${worst} ms during the window; measuring again`);
+  }
   // Steady state: pushes per second between the first and the last one.
   const steady = (ws) => (ws.times.length - 1) / ((ws.times.at(-1) - ws.times[0]) / 1000);
   const rateA = steady(a);

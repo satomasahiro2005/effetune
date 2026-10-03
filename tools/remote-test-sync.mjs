@@ -23,10 +23,13 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const logDir = path.join(root, '.poc-logs');
 const hostDir = path.join(logDir, 'sync-host');
 const clientDir = path.join(logDir, 'sync-client');
-const PORT = 47341;
-const HOST_CDP = 9351;
-const HOST_INSPECT = 9353;
-const CLIENT_CDP = 9352;
+// Ports can be moved (REMOTE_TEST_PORT, REMOTE_TEST_CDP_BASE) when another run shares the network stack,
+// e.g. Windows and WSL2 in mirrored networking mode.
+const PORT = Number(process.env.REMOTE_TEST_PORT) || 47341;
+const CDP_BASE = Number(process.env.REMOTE_TEST_CDP_BASE) || 9351;
+const HOST_CDP = CDP_BASE;
+const HOST_INSPECT = CDP_BASE + 2;
+const CLIENT_CDP = CDP_BASE + 1;
 const TOKEN = 'synctoken';
 fs.mkdirSync(logDir, { recursive: true });
 const logFile = path.join(logDir, `sync-${new Date().toISOString().replace(/[:.]/g, '-')}.log`);
@@ -460,7 +463,7 @@ async function main() {
     const t = await waitFor(async () => (await allEqual(P1, P2)) && !(await hostSnap()).ids.includes(target), 3000, 50);
     await waitFor(() => evalIn(P1, () => window.__acks.some((a) => a.message.op === 'edit')), 3000, 50);
     await evalIn(P1, () => { window.remoteClient.session.ws.send = window.__wsSend; });
-    const acks = await evalIn(P1, () => window.__acks.filter((a) => a.message.op === 'edit').map((a) => ({ ok: a.ack.ok, skipped: a.ack.skipped || [] })));
+    const acks = await evalIn(P1, () => window.__acks.filter((a) => a.message.op === 'edit').map((a) => ({ ok: a.ack.ok, skipped: a.ack.skipped || [], error: a.ack.error })));
     check('8 a set racing a delete of the same stage: everyone converges and the stage is gone', t !== null, JSON.stringify(acks));
     check('8 the late set is acknowledged with the op skipped', acks.length >= 1 && acks[0].ok === true && acks[0].skipped.includes(0), JSON.stringify(acks));
     await waitFor(() => allEqual(P1, P2), 3000, 50);
@@ -932,13 +935,20 @@ async function main() {
   {
     out('  ... 22. WebKit');
     let engine = null;
+    let wk = null;
+    let why = 'Playwright WebKit is not installed (npx playwright install webkit)';
     try {
       const { webkit } = require('playwright');
       if (fs.existsSync(webkit.executablePath())) engine = webkit;
     } catch (_) { /* not installed */ }
-    if (!engine) skip('22 WebKit repeat of checks 2-4', 'Playwright WebKit is not installed (npx playwright install webkit)');
+    if (engine) {
+      try { wk = await engine.launch(); } catch (error) {
+        // Linux without the WebKitGTK system libraries (npx playwright install-deps webkit).
+        why = `Playwright WebKit does not start here: ${String(error.message).split('\n')[0]}`;
+      }
+    }
+    if (!wk) skip('22 WebKit repeat of checks 2-4', why);
     else {
-      const wk = await engine.launch();
       browsers.push(wk);
       const freshToken = (await panel.evaluate('remotePanel.getStatus()')).token;
       const errorsBefore = consoleErrors.length;

@@ -172,10 +172,10 @@ function isPrivateIPv4(address) {
 }
 
 const VIRTUAL_ADAPTER = /vethernet|wsl|vmware|virtualbox|hyper-v|docker|vbox|loopback|tailscale|zerotier|hamachi|vpn|wireguard|npcap|bluetooth/i;
-// Interface names of Linux and macOS (docker0, br-<hash>, virbr0, veth*, lxdbr0, cni0, wg0, tun0, utun4,
+// Interface names of Linux and macOS (docker0, br-<hash>, virbr0, veth*, lxdbr0, incusbr0, cni0, wg0, tun0, utun4,
 // bridge100 of Internet Sharing, vmnet8, vnic0 ...). Anchored: real LAN names (eth0, enp3s0, wlan0, wlp2s0, en0)
 // never start with these.
-const VIRTUAL_ADAPTER_PREFIX = /^(br-|virbr|veth|lxc|lxd|cni|flannel|cali|kube|podman|vnic|vmnet|vmenet|utun|tun\d|tap\d|wg\d|ppp|awdl|llw|bridge\d|zt)/i;
+const VIRTUAL_ADAPTER_PREFIX = /^(br-|virbr|veth|lxc|lxd|incus|nordlynx|cni|flannel|cali|kube|podman|vnic|vmnet|vmenet|utun|tun\d|tap\d|wg\d|ppp|awdl|llw|bridge\d|zt)/i;
 // Adapter names are localized on Windows ("Ethernet 4"), so also match the MAC
 // prefixes of VirtualBox, Hyper-V, VMware, Parallels, libvirt/KVM, LXD and Docker adapters.
 const VIRTUAL_MAC = /^(0a:00:27|08:00:27|00:15:5d|00:50:56|00:0c:29|00:05:69|00:1c:14|00:1c:42|02:42|52:54:00|00:16:3e)/i;
