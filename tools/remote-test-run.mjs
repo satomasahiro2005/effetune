@@ -249,15 +249,40 @@ try {
     hidden: document.getElementById('pairing').hidden,
     checked: document.getElementById('enabled').checked,
     status: document.getElementById('status').textContent })`);
-  check('panel shows the switch on, the QR and the same text', dom.checked && !dom.hidden && dom.url === status.url &&
+  // Browser (the web client the app serves) is the default; App shows the ws:// link.
+  const webRe = new RegExp(`^http://(\\d+\\.\\d+\\.\\d+\\.\\d+):${port}/\\?t=${token}$`);
+  check('panel status: webUrl http://<ip>:port/?t=token next to the ws url', webRe.test(status.webUrl || ''), status.webUrl);
+  check('panel status: a QR image for the web link of every offered address',
+    status.addresses.every((a) => /^data:image\/svg\+xml;base64,/.test(a.webQr || '') && webRe.test(a.webUrl)),
+    status.addresses.map((a) => a.webUrl).join(', '));
+  check('panel shows the switch on, the QR and the Browser link by default', dom.checked && !dom.hidden && dom.url === status.webUrl &&
     dom.qr.startsWith('data:image/svg+xml') && dom.qrWidth > 0, JSON.stringify(dom));
   await screenshot(panel, 'panel-on.png');
+  await panel.evaluate(`document.getElementById('mode-app').click()`);
+  const appDom = await panel.evaluate(`({ url: document.getElementById('url').textContent,
+    qr: document.getElementById('qr').getAttribute('src'), pressed: document.getElementById('mode-app').getAttribute('aria-pressed') })`);
+  check('App mode shows the ws:// link and its own QR', appDom.url === status.url && appDom.pressed === 'true' &&
+    appDom.qr === status.addresses[0].qr && appDom.qr !== status.addresses[0].webQr, JSON.stringify(appDom).slice(0, 200));
+  await panel.evaluate(`document.getElementById('mode-browser').click()`);
+  const browserAgain = await panel.evaluate(`document.getElementById('url').textContent`);
+  check('Browser mode shows the web link again', browserAgain === status.webUrl, browserAgain);
+  const page = await fetch(`http://127.0.0.1:${port}/`);
+  const pageText = await page.text();
+  check('GET / on the remote port serves remote.html with a connect-src for its own host',
+    page.status === 200 && /EffeTune Remote/.test(pageText) &&
+    page.headers.get('content-security-policy') === `connect-src 'self' ws://127.0.0.1:${port}`,
+    `${page.status} ${page.headers.get('content-security-policy')}`);
+  const refused = await fetch(`http://127.0.0.1:${port}/config.json`);
+  check('files outside the precache list are not served', refused.status === 404, String(refused.status));
 
   // Toggle off: clients are closed and the port is released.
   const c1 = await tryClient(token);
   check('client connects before toggling off', !!c1.hello, JSON.stringify(c1.closeCode ?? ''));
   // Version visibility: hello reply names the host build; the panel lists each client's app/version.
   const appVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  check('hello reply lists the sync1 feature next to the old ones',
+    ['origin', 'savePreset', 'irSync', 'telemetry', 'overlays', 'sync1'].every((f) => (c1.hello.features || []).includes(f)),
+    JSON.stringify(c1.hello.features));
   check('hello reply carries appName, app (version) and a git-sha build',
     c1.hello.appName === 'EffeTune' && c1.hello.app === appVersion && /^[0-9a-f]{7,}$/.test(c1.hello.build || ''),
     JSON.stringify({ appName: c1.hello.appName, app: c1.hello.app, build: c1.hello.build }));

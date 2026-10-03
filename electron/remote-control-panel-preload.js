@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('remotePanel', Object.freeze({
   getStatus: () => ipcRenderer.invoke('remote-panel-v1:get-status'),
   setEnabled: enabled => ipcRenderer.invoke('remote-panel-v1:set-enabled', enabled === true),
   regenerateToken: () => ipcRenderer.invoke('remote-panel-v1:regenerate-token'),
+  join: input => ipcRenderer.invoke('remote-panel-v1:join', String(input || '')),
   onStatus: callback => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, status) => callback(status);

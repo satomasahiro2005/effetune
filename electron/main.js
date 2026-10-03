@@ -1406,6 +1406,13 @@ async function initializeApp() {
     getMainWindow: () => constants.getMainWindow()
   });
   void remoteControlHost.start();
+  // --remote-join=<link> opens that EffeTune as a remote editor once the app is up
+  // (the Remote Control window's "Join another EffeTune", for tests and power users).
+  const remoteJoin = process.argv.find(argument => argument.startsWith('--remote-join='));
+  if (remoteJoin) {
+    const joinResult = remoteControlHost.joinRemote(remoteJoin.slice('--remote-join='.length));
+    if (!joinResult.ok) console.error('[remote] --remote-join:', joinResult.error);
+  }
 
   // Every normal launch uses a sacrificial audio-only renderer. Auto-restarts
   // skip it so their startup-grace clock is not reset by a second navigation.

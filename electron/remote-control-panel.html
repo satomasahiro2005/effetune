@@ -82,6 +82,17 @@
     padding: 8px; border: 1px solid var(--line); border-radius: 6px;
   }
   .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .segmented { display: flex; margin: 0 auto 12px; max-width: 300px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .segmented button { flex: 1; border: 0; border-radius: 0; background: transparent; padding: 6px 10px; }
+  .segmented button + button { border-left: 1px solid var(--line); }
+  .segmented button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  #join-section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .join-row { display: flex; gap: 8px; }
+  .join-row input {
+    flex: 1; min-width: 0; font: inherit; color: var(--fg); background: var(--card);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
+  }
+  .join-error { color: var(--error); margin-top: 6px; min-height: 1.45em; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -97,6 +108,10 @@
     <ul class="devices" id="devices" hidden></ul>
 
     <div id="pairing" hidden>
+      <div class="segmented" role="group" aria-label="Connect from">
+        <button type="button" id="mode-browser" aria-pressed="true">Browser</button>
+        <button type="button" id="mode-app" aria-pressed="false">App</button>
+      </div>
       <img class="qr" id="qr" alt="QR code of the connection URL">
       <div class="field" id="address-field" hidden>
         <label for="address">Network</label>
@@ -111,6 +126,18 @@
         <button type="button" id="regenerate">New token</button>
       </div>
     </div>
+
+    <div id="join-section">
+      <div class="field">
+        <label for="join-input">Join another EffeTune</label>
+        <div class="join-row">
+          <input type="text" id="join-input" spellcheck="false" autocomplete="off"
+                 placeholder="http://192.168.0.5:47300/?t=…">
+          <button type="button" id="join">Join</button>
+        </div>
+        <div class="join-error" id="join-error" role="alert"></div>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -119,6 +146,8 @@
   let status = null;
   let selected = 0;
   let busy = false;
+  // Browser: link and QR code of the web client the app serves; App: the ws:// link for other apps.
+  let mode = 'browser';
 
   function statusText(s) {
     if (s.error) return { text: `Could not start: ${s.error}`, error: true };
@@ -160,8 +189,12 @@
       return option;
     }));
     const current = addresses[selected];
-    $('url').textContent = current.url;
-    if (current.qr) $('qr').src = current.qr;
+    const browser = mode === 'browser';
+    $('mode-browser').setAttribute('aria-pressed', String(browser));
+    $('mode-app').setAttribute('aria-pressed', String(!browser));
+    $('url').textContent = browser ? current.webUrl : current.url;
+    const qr = browser ? current.webQr : current.qr;
+    if (qr) $('qr').src = qr;
     else $('qr').removeAttribute('src');
   }
 
@@ -188,6 +221,23 @@
     render();
   });
   $('regenerate').addEventListener('click', () => run(() => api.regenerateToken()));
+  for (const [id, value] of [['mode-browser', 'browser'], ['mode-app', 'app']]) {
+    $(id).addEventListener('click', () => { mode = value; render(); });
+  }
+  async function join() {
+    const error = $('join-error');
+    error.textContent = '';
+    let result;
+    try {
+      result = await api.join($('join-input').value);
+    } catch (failure) {
+      result = { ok: false, error: 'The window could not be opened.' };
+    }
+    if (result && result.ok) $('join-input').value = '';
+    else error.textContent = (result && result.error) || 'The window could not be opened.';
+  }
+  $('join').addEventListener('click', join);
+  $('join-input').addEventListener('keydown', event => { if (event.key === 'Enter') join(); });
   $('copy').addEventListener('click', async () => {
     const url = $('url').textContent;
     try {

@@ -22,6 +22,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { WebSocketServer } = require('ws');
 const { createStaticHandler, isAllowedHost, isAllowedOrigin } = require('./remote-static-server.cjs');
+const { closeAllClientWindows, openRemoteClientWindow } = require('./remote-client-window.cjs');
 
 const CHANNELS = Object.freeze({
   rendererReady: 'remote-v1:renderer-ready',
@@ -41,6 +42,7 @@ const PANEL_CHANNELS = Object.freeze({
   getStatus: 'remote-panel-v1:get-status',
   setEnabled: 'remote-panel-v1:set-enabled',
   regenerateToken: 'remote-panel-v1:regenerate-token',
+  join: 'remote-panel-v1:join',
   status: 'remote-panel-v1:status'
 });
 
@@ -170,9 +172,14 @@ function pickLanAddress(interfaces = os.networkInterfaces()) {
   };
 }
 
-// The QR carries the API's own endpoint, not a link to any particular client app.
+// The App QR carries the API's own endpoint, not a link to any particular client app.
 function pairingUrl(address, port, token) {
   return `ws://${address}:${port}/?t=${encodeURIComponent(token)}`;
+}
+
+// The Browser QR opens the web client that this server itself serves.
+function webPairingUrl(address, port, token) {
+  return `http://${address}:${port}/?t=${encodeURIComponent(token)}`;
 }
 
 function qrSvgDataUrl(text) {
@@ -311,11 +318,13 @@ class RemoteControlHost {
     const lan = this.lan || pickLanAddress();
     const addresses = lan.offered.map(c => {
       const url = pairingUrl(c.address, this.port, this.token);
+      const webUrl = webPairingUrl(c.address, this.port, this.token);
       return {
         address: c.address,
         name: c.name,
         url,
-        ...(withQr ? { qr: qrSvgDataUrl(url) } : {})
+        webUrl,
+        ...(withQr ? { qr: qrSvgDataUrl(url), webQr: qrSvgDataUrl(webUrl) } : {})
       };
     });
     return {
@@ -330,6 +339,7 @@ class RemoteControlHost {
       connectString: this.connectString,
       addresses,
       url: addresses[0]?.url || null,
+      webUrl: addresses[0]?.webUrl || null,
       error: this.listenError,
       clients: this.countClients(),
       devices: [...(this.wss?.clients || [])].filter(ws => ws.authenticated).map(ws => ({
@@ -643,6 +653,22 @@ class RemoteControlHost {
       this.log('[remote] panel failed to load:', error?.message || error);
     });
     return panel;
+  }
+
+  // Does host:port name this very server? (Joining it would only show the app itself.)
+  isOwnAddress(host, port) {
+    if (!this.connectString || port !== this.port) return false;
+    if (host === 'localhost' || host === '[::1]' || host.startsWith('127.')) return true;
+    return (this.lan?.candidates || []).some(candidate => candidate.address === host);
+  }
+
+  // Settings > Remote Control > Join another EffeTune.
+  joinRemote(input) {
+    return openRemoteClientWindow(input, {
+      getMainWindow: this.getMainWindow,
+      isSelf: (host, port) => this.isOwnAddress(host, port),
+      log: (...args) => this.log(...args)
+    });
   }
 
   isPanelSender(sender) {
@@ -1257,6 +1283,7 @@ class RemoteControlHost {
     if (this.panelWindow && !this.panelWindow.isDestroyed()) {
       try { this.panelWindow.destroy(); } catch (_) { /* ignore */ }
     }
+    closeAllClientWindows();
     await this.stop({ reason: 'shutdown' });
   }
 }
@@ -1293,7 +1320,8 @@ function registerRemoteControlIpc({ ipcMain, getHost, getMainWindow }) {
     [PANEL_CHANNELS.regenerateToken, async host => {
       await host.regenerateToken();
       return host.getStatus({ withQr: true });
-    }]
+    }],
+    [PANEL_CHANNELS.join, (host, input) => host.joinRemote(typeof input === 'string' ? input.slice(0, 600) : '')]
   ]);
   // Analyzer frames come by send (fire-and-forget, up to 30 Hz), not invoke.
   const onTelemetry = (event, frames) => {
@@ -1327,5 +1355,6 @@ module.exports = {
   openRemoteControlPanel,
   pairingUrl,
   pickLanAddress,
-  registerRemoteControlIpc
+  registerRemoteControlIpc,
+  webPairingUrl
 };
