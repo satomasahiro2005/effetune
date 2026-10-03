@@ -129,6 +129,8 @@ Sync extension). Clients that do not know them ignore them.
 
 The reply to `hello` also carries `"appName"` (`"EffeTune"`) and `"build"` (a git short sha or a build date; omitted when unknown), next to `"app"`, which is the version string. They are for display. Clients decide what they can do from `features`, never from `app` or the version.
 
+It also carries `"effects"`, the sorted names (`nm`) of every effect this app can load, and `"dsp"`, the version of the DSP library the app was built from (omitted when unknown: it comes from `effetuneDsp` in `package.json`, or from `dsp/` in an unpackaged tree). A client compares `effects` with its own effect set before sending a chain: an effect that is not listed makes `chain` fail as a whole (`unknown effect`), so the client should leave such stages out and say so. `dsp` is for display and for telling a client that its own build differs. A hello may carry `"dsp"` too (the client's own DSP version); it is ignored. A host that predates these fields omits them: assume nothing about its effects.
+
 ### Telemetry
 
 While a connection is subscribed with `{"op":"telemetry","on":true}`, the app pushes the

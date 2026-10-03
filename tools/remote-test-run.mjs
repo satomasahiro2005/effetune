@@ -286,6 +286,10 @@ try {
   check('hello reply carries appName, app (version) and a git-sha build',
     c1.hello.appName === 'EffeTune' && c1.hello.app === appVersion && /^[0-9a-f]{7,}$/.test(c1.hello.build || ''),
     JSON.stringify({ appName: c1.hello.appName, app: c1.hello.app, build: c1.hello.build }));
+  check('hello reply carries the effect names and the dsp version of this tree',
+    Array.isArray(c1.hello.effects) && c1.hello.effects.includes('Volume') &&
+    c1.hello.dsp === JSON.parse(fs.readFileSync(path.join(root, 'dsp', 'bindings', 'js', 'package.json'), 'utf8')).version,
+    JSON.stringify({ n: c1.hello.effects?.length, dsp: c1.hello.dsp }));
   const deviceTexts = () => panel.evaluate(`[...document.querySelectorAll('#devices li')].map(li => li.textContent)`);
   let devs = (await panel.evaluate('remotePanel.getStatus()')).devices || [];
   check('panel status lists the client app/version with control characters stripped',

@@ -674,6 +674,11 @@ async function main() {
     JSON.stringify({ origin: data?.origin, features: data?.features }));
   check('hello state carries appName and a build', data?.appName === 'EffeTune' && (data.build === undefined || typeof data.build === 'string'),
     JSON.stringify({ appName: data?.appName, build: data?.build }));
+  check('hello state carries the effect names (sorted, includes Volume and Section) and a dsp version when known',
+    Array.isArray(data?.effects) && data.effects.includes('Volume') && data.effects.includes('Section') &&
+    data.effects.every((n, i, a) => typeof n === 'string' && (i === 0 || a[i - 1] <= n)) &&
+    (data.dsp === undefined || /^\d+\.\d+\.\d+/.test(data.dsp)),
+    JSON.stringify({ n: data?.effects?.length, dsp: data?.dsp }));
   const initialRev = data.rev;
 
   ({ ack, data } = await call(ws, { op: 'hello', app: 'EffectDeck', v: 99 }));
