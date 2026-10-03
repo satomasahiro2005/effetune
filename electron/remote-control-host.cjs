@@ -33,7 +33,8 @@ const CHANNELS = Object.freeze({
   status: 'remote-v1:status',
   getStatus: 'remote-v1:get-status',
   telemetry: 'remote-v1:telemetry',
-  telemetryControl: 'remote-v1:telemetry-control'
+  telemetryControl: 'remote-v1:telemetry-control',
+  presetsChanged: 'remote-v1:presets-changed'
 });
 
 const PANEL_CHANNELS = Object.freeze({
@@ -70,13 +71,14 @@ const STATE_DRAIN_BYTES = 64 * 1024;
 const STATE_DIRTY_CHECK_MS = 250;
 const IR_ID_PATTERN = /^[a-f0-9]{24}$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
-const FEATURES = Object.freeze(['origin', 'savePreset', 'irSync', 'telemetry', 'overlays']);
+const FEATURES = Object.freeze(['origin', 'savePreset', 'irSync', 'telemetry', 'overlays', 'sync1']);
 const APP_NAME = 'EffeTune';
 const CLIENT_INFO_MAX = 48;
 
 // Client-supplied text shown in the Remote Control window: strip control characters, cap length.
 function cleanClientText(value) {
   if (typeof value !== 'string') return null;
+  // eslint-disable-next-line no-control-regex
   return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, CLIENT_INFO_MAX) || null;
 }
 
@@ -104,7 +106,9 @@ function resolveBuild(app) {
 }
 const CLIENT_OPS = new Set([
   'hello', 'get', 'chain', 'params', 'bypass', 'listPresets', 'getPreset',
-  'savePreset', 'listIRs', 'getIR', 'putIR', 'telemetry'
+  'savePreset', 'listIRs', 'getIR', 'putIR', 'telemetry',
+  // sync1
+  'edit', 'history', 'slot', 'copySlot', 'presets', 'loadPreset', 'deletePreset'
 ]);
 // Analyzer mirror (op "telemetry"): latest frame per stage and type, per client.
 const TELEMETRY_DEFAULT_FPS = 15;
@@ -112,7 +116,10 @@ const TELEMETRY_MAX_FPS = 30;
 const TELEMETRY_MAX_FRAMES = 64;
 const TELEMETRY_MAX_RAW_BYTES = 1 << 20;
 const TELEMETRY_HIGH_WATER = 512 * 1024;
-const MUTATING_OPS = new Set(['chain', 'params', 'bypass']);
+// Ops whose ack carries `rev` (the host revision that contains the command).
+const MUTATING_OPS = new Set([
+  'chain', 'params', 'bypass', 'edit', 'history', 'slot', 'copySlot', 'loadPreset'
+]);
 
 let activeHost = null;
 
@@ -766,16 +773,19 @@ class RemoteControlHost {
   }
 
   ingestSnapshot(snapshot, cause) {
-    const json = JSON.stringify({
+    const next = {
       masterBypass: !!snapshot.masterBypass,
-      pipeline: snapshot.pipeline || []
-    });
+      pipeline: Array.isArray(snapshot.pipeline) ? snapshot.pipeline : [],
+      ids: Array.isArray(snapshot.ids) ? snapshot.ids : [],
+      slot: snapshot.slot === 'B' ? 'B' : 'A',
+      epoch: typeof snapshot.epoch === 'string' ? snapshot.epoch : ''
+    };
+    // Ids, slot and epoch take part in the comparison: re-creating identical
+    // content (a preset load) must still reach clients, because every id is new.
+    const json = JSON.stringify(next);
     if (json === this.lastSnapshotJson) return false;
     this.lastSnapshotJson = json;
-    this.snapshot = {
-      masterBypass: !!snapshot.masterBypass,
-      pipeline: Array.isArray(snapshot.pipeline) ? snapshot.pipeline : []
-    };
+    this.snapshot = next;
     this.rev += 1;
     this.mergePendingOrigin(this.resolveCause(cause));
     this.scheduleBroadcast();
@@ -789,6 +799,10 @@ class RemoteControlHost {
       app: this.app.getVersion(),
       masterBypass: this.snapshot ? this.snapshot.masterBypass : false,
       pipeline: this.snapshot ? this.snapshot.pipeline : [],
+      epoch: this.snapshot ? this.snapshot.epoch : '',
+      ids: this.snapshot ? this.snapshot.ids : [],
+      slot: this.snapshot ? this.snapshot.slot : 'A',
+      host: os.hostname(),
       ...extra
     };
   }
@@ -864,6 +878,8 @@ class RemoteControlHost {
     ws.isAlive = true;
     ws.uploads = new Map();
     ws.telemetry = null;
+    ws.sync = false;
+    ws.stateDirty = false;
     this.log(`[remote] client connected: ${req.socket.remoteAddress}`);
     this.emitStatus();
     ws.on('pong', () => { ws.isAlive = true; });
@@ -887,10 +903,10 @@ class RemoteControlHost {
     if (ws.readyState === 1) ws.send(JSON.stringify(message));
   }
 
-  ack(ws, seq, ok, error) {
+  ack(ws, seq, ok, error, extra) {
     if (seq === undefined) return;
     this.send(ws, ok
-      ? { op: 'ack', seq, ok: true }
+      ? { op: 'ack', seq, ok: true, ...extra }
       : { op: 'ack', seq, ok: false, error: String(error || 'error') });
   }
 
@@ -920,6 +936,8 @@ class RemoteControlHost {
         version: cleanClientText(msg.version),
         build: cleanClientText(msg.build)
       };
+      // sync1 clients are also told when the stored presets change.
+      ws.sync = msg.sync === 1;
       this.emitStatus();
     }
     if (op === 'telemetry') {
@@ -941,7 +959,9 @@ class RemoteControlHost {
       this.ack(ws, seq, false, result.error);
       return;
     }
-    this.ack(ws, seq, true);
+    this.ack(ws, seq, true, undefined, MUTATING_OPS.has(op)
+      ? { rev: this.rev, ...(result.skipped?.length ? { skipped: result.skipped } : {}) }
+      : undefined);
     const seqField = seq === undefined ? {} : { seq };
     switch (op) {
       case 'hello':
@@ -967,9 +987,22 @@ class RemoteControlHost {
       case 'listIRs':
         this.send(ws, { op: 'irs', items: result.items || [], ...seqField });
         break;
+      case 'presets':
+        this.send(ws, { op: 'presets', presets: result.presets || {}, ...seqField });
+        break;
       default:
         break;
     }
+  }
+
+  // The renderer persisted the preset list (any client or the host user did).
+  handlePresetsChanged() {
+    if (!this.wss) return false;
+    const message = JSON.stringify({ op: 'presetsChanged' });
+    for (const ws of this.wss.clients) {
+      if (ws.authenticated && ws.sync && ws.readyState === 1) ws.send(message);
+    }
+    return true;
   }
 
   // ---- analyzer mirror ---------------------------------------------------
@@ -1238,6 +1271,7 @@ function registerRemoteControlIpc({ ipcMain, getHost, getMainWindow }) {
     [CHANNELS.rendererUnavailable, host => (host ? host.setRendererUnavailable() : false)],
     [CHANNELS.response, (host, response) => (host ? host.handleRendererResponse(response) : false)],
     [CHANNELS.state, (host, snapshot) => (host ? host.handleRendererState(snapshot) : false)],
+    [CHANNELS.presetsChanged, host => (host ? host.handlePresetsChanged() : false)],
     [CHANNELS.openPanel, host => { host?.openPanel(); return !!host; }],
     [CHANNELS.getStatus, host => (host ? host.getBriefStatus() : { enabled: false })]
   ]);

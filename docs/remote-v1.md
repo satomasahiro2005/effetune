@@ -85,7 +85,7 @@ requests that also return data, the ack comes first and the data message carries
 
 | Request | Effect |
 |---|---|
-| `{"op":"hello","v":1,"app":"EffectDeck","version":"2026.09.28","build":"31"}` | Replies with `state`, which also carries `"features":["origin","savePreset","irSync","telemetry","overlays"]`, `"appName"` and (when known) `"build"`. Any other `v` is rejected. `app`, `version` and `build` are optional strings naming the client; they are shown in the Remote Control window (control characters removed, cut to 48 characters). Other extra fields are ignored. |
+| `{"op":"hello","v":1,"app":"EffectDeck","version":"2026.09.28","build":"31"}` | Replies with `state`, which also carries `"features":["origin","savePreset","irSync","telemetry","overlays","sync1"]`, `"appName"` and (when known) `"build"`. Any other `v` is rejected. `app`, `version` and `build` are optional strings naming the client; they are shown in the Remote Control window (control characters removed, cut to 48 characters). Other extra fields are ignored. |
 | `{"op":"get"}` | Replies with `state`. |
 | `{"op":"chain","pipeline":[...]}` | Replaces the whole pipeline (at most 256 items). If any `nm` is unknown, the request fails and nothing changes. Master bypass keeps its state. |
 | `{"op":"params","index":i,"params":{...}}` | Applies the keys to stage `i` (0-based) of the current pipeline. Keys that are not given stay as they are. |
@@ -123,6 +123,9 @@ the computer by applying every push that does not carry one of its own `seq` val
 Replies to `hello` and `get` carry the request's `seq` and `"origin":"remote"`. They are
 snapshots, not echoes of an edit: always apply them. A command that leaves the pipeline as it
 was produces no push, so do not wait for one to confirm a command; the ack does that.
+
+Since the `sync1` extension every `state` also carries `epoch`, `ids`, `slot` and `host` (see
+Sync extension). Clients that do not know them ignore them.
 
 The reply to `hello` also carries `"appName"` (`"EffeTune"`) and `"build"` (a git short sha or a build date; omitted when unknown), next to `"app"`, which is the version string. They are for display. Clients decide what they can do from `features`, never from `app` or the version.
 
@@ -253,6 +256,139 @@ is already in the library succeeds and changes nothing.
 Only single-file IRs are listed and transferred. A true-stereo pair (two stereo files named
 L/R) has a combined id and is left out.
 
+## Browser clients
+
+The desktop app also serves the EffeTune web client on the remote port, over plain http:
+
+```
+http://<LAN IPv4>:<port>/?t=<token>
+```
+
+Remote Control window > **Browser** shows this link and its QR code (the **App** tab shows the
+`ws://` link for other apps). The page is `remote.html`: the real effect list and pipeline editor
+of EffeTune, without the player, library, audio settings or measurement tools. It keeps the token
+in `localStorage`, removes `t` from the address bar and opens `ws://<same host:port>/?t=<token>`.
+The hosted web version (https) cannot do this: a browser refuses `ws://` to a LAN address from an
+https page, which is why the desktop app serves the page itself. The desktop app can also join
+another one: **Join another EffeTune** in the same window opens a client window for a pasted link.
+
+- Static files: `GET` and `HEAD` only. Only the files the web version precaches
+  (`sw-precache.js`, without `effetune.html`, `sw.js`, `sw-precache.js` and `manifest.json`) are
+  served; everything else, including `config.json` and the app's own `electron/` code, is 404.
+  They are public application code, so they need no token; the WebSocket still does, unchanged.
+- `Host` header (static files and WebSocket upgrades): an IPv4 literal, `localhost`, `[ipv6]` or
+  `*.local`, optionally with a port. Anything else gets 403 (DNS-rebinding defence).
+- `Origin` header (WebSocket upgrade only): an `http:`/`https:` origin must be exactly
+  `http://<Host>`. A missing `Origin` (EffectDeck, scripts) is accepted; `Origin: null` and other
+  schemes get 403.
+- `remote.html` is sent with `Content-Security-Policy: connect-src 'self' ws://<Host>`.
+- The page is served from one origin per port. If the port falls back (47300 busy, 47301 used),
+  the origin changes and the QR code must be scanned again.
+
+## Sync extension (sync1)
+
+Advertised as `"sync1"` in `features`. It lets every participant (the app itself, browser clients,
+EffectDeck) edit the same pipeline and see each other's edits live. Everything is additive: a client
+that ignores it keeps working with `chain`, `params` and `bypass` exactly as before.
+
+### State fields
+
+Every `state` message (replies and pushes) also carries:
+
+| Field | Meaning |
+|---|---|
+| `epoch` | 8 hex characters, new whenever the app's window is (re)loaded. Ids and `rev` are comparable only within one epoch. |
+| `ids` | `string[]`, parallel to `pipeline`: the stage id of every item. It is not inside the items, because clients echo items back unchanged. |
+| `slot` | `"A"` or `"B"`: the active pipeline. |
+| `host` | the computer's host name, for display. |
+
+`hello` may carry `"sync":1` (and `"build":"browser"` or `"desktop-client"` for the web client). It
+only makes the connection receive `presetsChanged`.
+
+### Stage ids
+
+A stage id is an opaque string matching `^[A-Za-z0-9_.-]{1,40}$` that belongs to one plugin
+*instance*. The app gives `h.<n>` to every stage it creates (adds, preset loads, undo, `chain`, A/B).
+A client names the stages it creates `c<random>.<n>` and may propose the id in `ins`; ids starting
+with `h.` cannot be proposed. A loaded preset, `chain` or undo replaces every id.
+
+### Ops
+
+`edit` carries a batch of ops that address stages by id:
+
+```
+{"t":"set",    "id", "p":{<shortKey>:value,...}, "d":["ib"|"ob"|"ch",...]}  // d: optional keys to unset
+{"t":"ins",    "id", "after": id|null, "at": int, "item":{"nm":..., ...short state}}
+{"t":"del",    "id"}
+{"t":"mov",    "id", "after": id|null, "at": int}
+{"t":"bypass", "on": bool}
+```
+
+Position rule, the same everywhere: `after:null` puts the stage at the head; otherwise, if the
+`after` stage exists, right after it; otherwise at `min(at, length)`. `set`, `del` and `mov` on a
+missing id are skipped, `ins` of an existing id is skipped, `set` is last-writer-wins per key in the
+order the app receives them. A changed effect (`nm`) is a `del` plus an `ins`, never a `set`.
+
+```
+→ {"op":"edit","seq":5,"epoch":"9f3a01cc","base":41,"ops":[...]}
+← {"op":"ack","seq":5,"ok":true,"rev":42,"skipped":[1]}
+```
+
+The whole batch is validated before anything is applied. Errors (`ok:false`): `stale-epoch`,
+`invalid-op` (malformed op or id), `unknown-effect`, `too-long` (more than 512 ops or a result over
+256 stages). `base` (the client's confirmed `rev`) is informational and never makes an edit fail.
+
+`rev` on acks: every ack of `edit`, `history`, `slot`, `copySlot`, `loadPreset` and also of the older
+`chain`, `params` and `bypass` carries `rev`, the app's revision after the command took effect. A
+`state` with `rev >= ack.rev` contains the command. `skipped` lists the indexes of ops that did not
+apply.
+
+### Other ops
+
+| Op | Effect |
+|---|---|
+| `{"op":"history","dir":"undo"}` / `"redo"` | The app's own undo or redo. It is global: it reverts the last change by anyone. |
+| `{"op":"slot","slot":"B"}` | Switches the active pipeline like the A/B button, including its short fade. No-op when already active. |
+| `{"op":"copySlot","from":"A","to":"B"}` | Same as the copy A to B / B to A buttons. |
+| `{"op":"presets"}` | Replies `{"op":"presets","presets":{name:preset,...}}` (loadable presets, stored format). |
+| `{"op":"loadPreset","name":"..."}` | Loads a stored preset as if the user picked it on the computer (message, preset name, history). |
+| `{"op":"deletePreset","name":"..."}` | Deletes a stored preset. |
+
+`{"op":"presetsChanged"}` (no `seq`) is pushed to `sync` connections whenever the stored presets
+change.
+
+### Transport details
+
+- A connection whose send buffer holds more than 1 MiB skips state pushes and gets the latest state
+  once it drains (a full state replaces any earlier one).
+- Pushes never carry a `seq`, except the copy for the client that issued the command, as before.
+
+### Client algorithm
+
+The app broadcasts full states; a client keeps `confirmed` (the last state it adopted) and a list of
+`pending` batches it sent. What it shows is `apply(confirmed, pending)`.
+
+1. On a state: if the epoch changed, drop `pending` and adopt it; if `rev` went backwards, ignore it;
+   otherwise adopt it. Drop every pending batch whose ack `rev` is `<=` the adopted `rev`. Redraw
+   from `apply(confirmed, pending)`.
+2. On a local edit: diff the editor against `apply(confirmed, pending)` into ops, send them as one
+   `edit` (at most every 33 ms) and add them to `pending`.
+3. On an ack: remember its `rev`; a failed ack removes the batch and the editor snaps back.
+4. After 10 s without an ack, drop the batch and send `get`.
+5. On disconnect, drop `pending`; the state received after reconnecting is adopted as a whole. An
+   edit whose ack was lost is never resent, because it could undo a newer change by someone else.
+
+Conflicts:
+
+| Case | Outcome |
+|---|---|
+| Same key edited at once | The app's arrival order wins; everyone adopts it. |
+| Different keys of one stage | Both are kept. |
+| `set`/`mov` on a deleted stage | Skipped. |
+| `ins`/`mov` after a deleted stage | Placed at the clamped `at`. |
+| Preset load, `chain` or undo racing an edit | New ids; later ops on old ids are skipped. |
+| App restart or window reload | New epoch; `pending` is dropped and the state adopted. |
+
 ## Limitations
 
 - Only the active pipeline (A or B) is exposed.
@@ -268,4 +404,9 @@ L/R) has a combined id and is left out.
   Analyzer are not. Overlay frames are full-resolution and sent for every PEQ at the push
   rate, whether or not the client is showing them.
 - The IR library window does not refresh while it is open when an IR arrives.
+- Browser clients do not show analyzers (they render idle), the IR picker, or MIDI and clipboard
+  features. Undo and redo are global, not per client.
+- A client whose plugin rewrites its own parameters without a user gesture is not allowed to send
+  that change (the app's value is restored); only edits made within 2 s of a touch, key or pointer
+  event are sent.
 - No discovery (mDNS). Pair with the QR code or enter the address by hand.

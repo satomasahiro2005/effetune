@@ -11,6 +11,14 @@ import { identifySingleIr } from '../ir-library/ir-library-id.js';
 import { isSupportedIrFileName } from '../ir-library/audio-header-metadata.js';
 import { initRemoteControlButton } from './remote-control-button.js';
 import { RemoteTelemetry } from './remote-telemetry.js';
+import {
+    applyMasterBypass,
+    applyOpsToPipeline,
+    applyParamsToPlugin,
+    createIdRegistry,
+    finishBatch,
+    validateEdit
+} from './pipeline-apply.js';
 
 const STATE_MIN_INTERVAL_MS = 100;
 const SAFETY_POLL_MS = 1000;
@@ -19,6 +27,12 @@ const MAX_CHAIN_ITEMS = 256;
 const MAX_PRESET_NAME_LENGTH = 256;
 const FORBIDDEN_PRESET_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
 const IR_ID_PATTERN = /^[a-f0-9]{24}$/;
+
+function createEpoch(cryptoRef) {
+    const bytes = new Uint8Array(4);
+    cryptoRef.getRandomValues(bytes);
+    return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
 
 function extensionOf(fileName) {
     const match = String(fileName || '').toLowerCase().match(/\.([a-z0-9]{1,10})$/);
@@ -50,6 +64,10 @@ class RemoteControl {
         this.disposeTelemetryControl = null;
         // Snapshots are only published while the server in main is running.
         this.active = false;
+        // Stage ids and the epoch live in this renderer: ids are only comparable
+        // within one epoch, which changes when the renderer (or the app) restarts.
+        this.epoch = createEpoch(win.crypto);
+        this.ids = createIdRegistry('h');
     }
 
     async start() {
@@ -105,7 +123,14 @@ class RemoteControl {
         const pipeline = (audioManager?.pipeline || []).map(plugin =>
             getSerializablePluginStateShort(plugin)
         );
-        return { masterBypass: !!audioManager?.masterBypass, pipeline };
+        const plugins = audioManager?.pipeline || [];
+        return {
+            masterBypass: !!audioManager?.masterBypass,
+            pipeline,
+            ids: plugins.map(plugin => this.ids.idOf(plugin)),
+            slot: audioManager?.currentPipeline === 'B' ? 'B' : 'A',
+            epoch: this.epoch
+        };
     }
 
     installHooks() {
@@ -125,6 +150,26 @@ class RemoteControl {
             audioManager.setMasterBypass = function (...args) {
                 const result = original.apply(this, args);
                 try { self.schedulePublish(); } catch (_) { /* ignore */ }
+                return result;
+            };
+        }
+        // Every worklet commit (A/B switch, routing, bypass, preset load) is a pipeline
+        // change; publishing from here keeps clients live without waiting for the poll.
+        if (audioManager && typeof audioManager.commitPowerTopologyMutation === 'function') {
+            const original = audioManager.commitPowerTopologyMutation;
+            audioManager.commitPowerTopologyMutation = function (...args) {
+                const result = original.apply(this, args);
+                try { self.schedulePublish(); } catch (_) { /* ignore */ }
+                return result;
+            };
+        }
+        // Clients with a preset list are told when the stored presets change.
+        const presetManager = this.win.pipelineManager?.presetManager;
+        if (presetManager && typeof presetManager.persistPresets === 'function') {
+            const original = presetManager.persistPresets;
+            presetManager.persistPresets = async function (...args) {
+                const result = await original.apply(this, args);
+                try { self.api.notifyPresets?.()?.catch?.(() => {}); } catch (_) { /* ignore */ }
                 return result;
             };
         }
@@ -193,6 +238,20 @@ class RemoteControl {
                 return this.opParams(msg);
             case 'bypass':
                 return this.opBypass(msg);
+            case 'edit':
+                return this.opEdit(msg);
+            case 'history':
+                return this.opHistory(msg);
+            case 'slot':
+                return this.opSlot(msg);
+            case 'copySlot':
+                return this.opCopySlot(msg);
+            case 'presets':
+                return this.opPresets();
+            case 'loadPreset':
+                return this.opLoadPreset(msg);
+            case 'deletePreset':
+                return this.opDeletePreset(msg);
             case 'listPresets':
                 return this.opListPresets();
             case 'getPreset':
@@ -245,15 +304,9 @@ class RemoteControl {
         return {};
     }
 
-    // Mirrors the master toggle click handler in pipeline-core.js.
     setBypass(on) {
-        const { pipelineManager } = this.requireApp();
-        const core = pipelineManager.core;
-        core.enabled = !on;
-        const toggle = core.masterToggle || this.win.document.querySelector('.toggle-button.master-toggle');
-        toggle?.classList.toggle('off', on);
-        core.workletSync.updateMasterBypass(on);
-        core.updateAllPluginDisplayState?.();
+        this.requireApp();
+        applyMasterBypass(this.win, on);
     }
 
     opBypass(msg) {
@@ -274,17 +327,81 @@ class RemoteControl {
             throw new Error('params must be an object');
         }
         const plugin = pipeline[index];
-        const { nm, en, ib, ob, ch, ...rest } = params;
-        if (Object.keys(rest).length > 0) plugin.setParameters(rest);
-        if (typeof en === 'boolean') plugin.setEnabled(en);
-        if (ib !== undefined) plugin.inputBus = ib;
-        if (ob !== undefined) plugin.outputBus = ob;
-        if (ch !== undefined) plugin.channel = ch === '' ? null : ch;
+        applyParamsToPlugin(plugin, params);
         pipelineManager.core.updateWorkletPlugin(plugin);
         plugin.syncUIControls?.();
         pipelineManager.core.updateAllPluginDisplayState?.();
         this.win.uiManager?.updateURL?.();
         this.scheduleHistorySave();
+        return {};
+    }
+
+    // Id-addressed batch from a sync1 client; see sync-ops.mjs for the semantics.
+    opEdit(msg) {
+        this.requireApp();
+        if (msg.epoch !== this.epoch) throw new Error('stale-epoch');
+        const checked = validateEdit(this.win, msg.ops, { isHost: true });
+        if (!checked.ok) throw new Error(checked.error);
+        const result = applyOpsToPipeline(this.win, msg.ops, { registry: this.ids });
+        finishBatch(this.win, result, {
+            saveHistory: () => this.win.pipelineManager.historyManager.saveState(),
+            scheduleHistorySave: () => this.scheduleHistorySave()
+        });
+        return result.skipped.length ? { skipped: result.skipped } : {};
+    }
+
+    // Global undo/redo: reverts the last change by anyone, like the host's own buttons.
+    opHistory(msg) {
+        const { pipelineManager } = this.requireApp();
+        if (msg.dir === 'undo') pipelineManager.historyManager.undo();
+        else if (msg.dir === 'redo') pipelineManager.historyManager.redo();
+        else throw new Error('dir must be undo or redo');
+        return {};
+    }
+
+    async opSlot(msg) {
+        const { audioManager } = this.requireApp();
+        if (msg.slot !== 'A' && msg.slot !== 'B') throw new Error('slot must be A or B');
+        if (audioManager.currentPipeline === msg.slot) return {};
+        const uiManager = this.win.uiManager;
+        if (!uiManager?.togglePipeline) throw new Error('app-not-ready');
+        await uiManager.togglePipeline();
+        return {};
+    }
+
+    opCopySlot(msg) {
+        this.requireApp();
+        const uiManager = this.win.uiManager;
+        if (!uiManager) throw new Error('app-not-ready');
+        if (msg.from === 'A' && msg.to === 'B') uiManager.copyAToB();
+        else if (msg.from === 'B' && msg.to === 'A') uiManager.copyBToA();
+        else throw new Error('copySlot must be A to B or B to A');
+        return {};
+    }
+
+    async opPresets() {
+        const { pipelineManager } = this.requireApp();
+        const presetManager = pipelineManager.presetManager;
+        const presets = typeof presetManager.getLoadablePresets === 'function'
+            ? await presetManager.getLoadablePresets()
+            : await presetManager.getPresets();
+        return { presets: JSON.parse(JSON.stringify(presets || {})) };
+    }
+
+    // As if the host user picked the preset: toast, preset name, history entry.
+    async opLoadPreset(msg) {
+        const { pipelineManager } = this.requireApp();
+        if (typeof msg.name !== 'string' || !msg.name) throw new Error('name must be a string');
+        const ok = await pipelineManager.presetManager.loadPreset(msg.name);
+        if (ok === false) throw new Error('preset load failed: ' + msg.name);
+        return {};
+    }
+
+    async opDeletePreset(msg) {
+        const { pipelineManager } = this.requireApp();
+        if (typeof msg.name !== 'string' || !msg.name) throw new Error('name must be a string');
+        const ok = await pipelineManager.presetManager.deletePreset(msg.name);
+        if (ok === false) throw new Error('preset not found: ' + msg.name);
         return {};
     }
 
