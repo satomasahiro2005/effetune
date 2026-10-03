@@ -27,8 +27,6 @@ const MULTI_F0_RESOLUTIONS = [
 ];
 const MULTI_F0_LAYOUTS = ['Vertical', 'Horizontal'];
 const MULTI_F0_HISTORY_WIDTH = 1024;
-const MULTI_F0_KEY_GUTTER_CSS_PX = 28;
-const MULTI_F0_HORIZONTAL_KEY_GUTTER_CSS_PX = MULTI_F0_KEY_GUTTER_CSS_PX * 1.6;
 const MULTI_F0_PASS_THROUGH_PROCESSOR = 'return data;';
 const MULTI_F0_BLACK_KEY_CLASSES = new Set([1, 3, 6, 8, 10]);
 const MULTI_F0_WHITE_KEY_CLASSES = [0, 2, 4, 5, 7, 9, 11];
@@ -130,6 +128,9 @@ class NoteSpectrogramPlugin extends PluginBase {
         this.nc = MULTI_F0_DEFAULT_REGULAR_CANDIDATES;
         this.history = new Float32Array(MULTI_F0_HISTORY_WIDTH * MULTI_F0_PITCH_COUNT);
         this.levelHistory = new Float32Array(MULTI_F0_HISTORY_WIDTH * MULTI_F0_PITCH_COUNT);
+        // Marks the last column of each telemetry frame; the columns before it
+        // up to the previous mark belong to the same frame.
+        this.volumeFrameEnds = new Uint8Array(MULTI_F0_HISTORY_WIDTH).fill(1);
         this.writeColumn = 0;
         this.columnPhase = 0;
         this.columnPeriod = this.ts / MULTI_F0_HISTORY_WIDTH;
@@ -217,15 +218,18 @@ class NoteSpectrogramPlugin extends PluginBase {
             this.pr = params.pr;
             this.configureHistoryImage();
             this.volumeHistoryDirty = true;
+            this._graphReadout?.clear();
             this.drawGraph();
         }
         if (MULTI_F0_LAYOUTS.includes(params.ly) && params.ly !== this.ly) {
             this.ly = params.ly;
+            this._graphReadout?.clear();
             this.drawGraph();
         }
         if (params.vl !== undefined && (params.vl === true) !== this.vl) {
             this.vl = params.vl === true;
             this.volumeHistoryDirty = true;
+            this._graphReadout?.clear();
             this.drawGraph();
         }
         if (params.ts !== undefined) {
@@ -394,6 +398,7 @@ class NoteSpectrogramPlugin extends PluginBase {
     clearHistory() {
         this.history?.fill(0);
         this.levelHistory?.fill(0);
+        this.volumeFrameEnds?.fill(1);
         this.writeColumn = 0;
         this.columnPhase = 0;
         this.scrollTime = null;
@@ -449,7 +454,8 @@ class NoteSpectrogramPlugin extends PluginBase {
         const light = background.every(channel => channel > 127);
         return {
             trace,
-            whiteKey: light ? 255 : 221,
+            whiteKey: light ? 255 : 238,
+            blackKey: 17,
             whiteBand: background,
             blackBand: light ? soft : background.map(channel => channel + MULTI_F0_BLACK_KEY_BACKGROUND),
             volumeCompositeOperation: light ? 'darken' : 'lighter'
@@ -486,7 +492,7 @@ class NoteSpectrogramPlugin extends PluginBase {
                 continue;
             }
             const midi = MULTI_F0_FIRST_MIDI + (this.pr === 'High' ? (pitch - MULTI_F0_FINE_CENTER) / MULTI_F0_FINE_DIVISIONS : pitch);
-            const color = this.displayOptions?.noteColor?.(midi) ?? (this.cl === 'Rainbow'
+            const color = this.displayOptions?.noteColor?.(midi, value) ?? (this.cl === 'Rainbow'
                 ? (this.pr === 'High' ? multiF0InterpolatedNoteColor(pitch) : MULTI_F0_NOTE_COLORS[pitchClass])
                 : palette.trace);
             pixels[pixelOffset] = this.displayOptions?.transparent ? color[0] : Math.round(background[0] + (color[0] - background[0]) * value);
@@ -640,6 +646,7 @@ class NoteSpectrogramPlugin extends PluginBase {
             const startColumn = this.writeColumn;
             for (let offset = 0; offset < advance - 1; offset++) {
                 const destination = (startColumn + offset) % MULTI_F0_HISTORY_WIDTH;
+                this.volumeFrameEnds[destination] = delta === 1 ? 0 : 1;
                 if (delta === 1) {
                     const source = (destination + MULTI_F0_HISTORY_WIDTH - 1) %
                         MULTI_F0_HISTORY_WIDTH;
@@ -669,6 +676,7 @@ class NoteSpectrogramPlugin extends PluginBase {
             const latestColumn = (startColumn + advance - 1) % MULTI_F0_HISTORY_WIDTH;
             this.history.set(this.intensity, latestColumn * MULTI_F0_PITCH_COUNT);
             this.levelHistory.set(this.levelIntensity, latestColumn * MULTI_F0_PITCH_COUNT);
+            this.volumeFrameEnds[latestColumn] = 1;
             this.writeColumn = (startColumn + advance) % MULTI_F0_HISTORY_WIDTH;
             this.paintColumns(startColumn, advance);
             this._paintVolumeColumns(startColumn, advance);
@@ -779,14 +787,18 @@ class NoteSpectrogramPlugin extends PluginBase {
                 this.syncUIControls?.();
             }, 'mx'
         );
-        container.appendChild(colorRow);
-        container.appendChild(resolutionRow);
-        container.appendChild(layoutRow);
-        container.appendChild(volumeRow);
-        container.appendChild(timeSpanRow);
-        container.appendChild(regularCandidatesRow);
-        container.appendChild(minNoteRow);
-        container.appendChild(maxNoteRow);
+        // Two columns on desktop, one on mobile (css/effetune.css and css/effetune-mobile.css).
+        const parameters = document.createElement('div');
+        parameters.className = 'analyzer-parameters';
+        parameters.appendChild(colorRow);
+        parameters.appendChild(resolutionRow);
+        parameters.appendChild(layoutRow);
+        parameters.appendChild(volumeRow);
+        parameters.appendChild(timeSpanRow);
+        parameters.appendChild(regularCandidatesRow);
+        parameters.appendChild(minNoteRow);
+        parameters.appendChild(maxNoteRow);
+        container.appendChild(parameters);
 
         const graph = this.createResponsiveGraph({
             maxWidth: 1024,
@@ -814,6 +826,24 @@ class NoteSpectrogramPlugin extends PluginBase {
         } else {
             this.drawGraph();
         }
+        this._graphReadout = window.GraphReadout?.attach({
+            mount: graph.container,
+            surface: this.canvas,
+            // The piano roll, or the keyboard gutter while the pointer is over it (canvas coordinates).
+            plot: point => {
+                const frame = this._readoutFrame;
+                if (!frame?.valid) return null;
+                const { horizontal, rollWidth, gutter, height } = frame;
+                const onKeys = (horizontal ? point.y : point.x) >= rollWidth;
+                const start = onKeys ? rollWidth : 0;
+                const length = onKeys ? gutter : rollWidth;
+                return horizontal
+                    ? { left: 0, top: start, width: height, height: length }
+                    : { left: start, top: 0, width: length, height };
+            },
+            read: (x, y) => this._readNote(x, y),
+            crosshair: 'xy'
+        });
         return container;
     }
 
@@ -886,6 +916,19 @@ class NoteSpectrogramPlugin extends PluginBase {
         return best;
     }
 
+    // Parabolic interpolation over the neighboring fine bins places the peak
+    // between bins, in fine-bin units within [-0.5, 0.5].
+    _peakOffset(historyOffset, best) {
+        if (best <= 0 || best >= MULTI_F0_PITCH_COUNT - 1) return 0;
+        const below = this.history[historyOffset + best - 1];
+        const peak = this.history[historyOffset + best];
+        const above = this.history[historyOffset + best + 1];
+        const curvature = below - 2 * peak + above;
+        if (curvature >= 0) return 0;
+        const offset = 0.5 * (below - above) / curvature;
+        return offset < -0.5 ? -0.5 : offset > 0.5 ? 0.5 : offset;
+    }
+
     _volumeBarsForColumn(historyOffset) {
         const bars = [];
         for (let midi = this.mn; midi <= this.mx; midi++) {
@@ -896,7 +939,7 @@ class NoteSpectrogramPlugin extends PluginBase {
         return bars;
     }
 
-    _paintVolumeBar(context, column, historyOffset, bar, rowHeight, palette) {
+    _volumeBarShape(historyOffset, bar, rowHeight, palette) {
         const { midi, best, confidence } = bar;
         const pitchClass = midi % 12;
         const background = MULTI_F0_BLACK_KEY_CLASSES.has(pitchClass)
@@ -905,7 +948,7 @@ class NoteSpectrogramPlugin extends PluginBase {
         const pitch = MULTI_F0_FIRST_MIDI + (best - MULTI_F0_FINE_CENTER) / MULTI_F0_FINE_DIVISIONS;
         const signalColor = this.displayOptions?.signalColor?.(pitch, confidence);
         const normalized = this.levelHistory[historyOffset + best];
-        const color = signalColor?.rgb ?? this.displayOptions?.noteColor?.(pitch) ?? (this.cl === 'Rainbow'
+        const color = signalColor?.rgb ?? this.displayOptions?.noteColor?.(pitch, normalized) ?? (this.cl === 'Rainbow'
             ? multiF0InterpolatedNoteColor(best)
             : palette.trace);
         const red = this.displayOptions?.transparent ? color[0] : Math.round(background[0] + (color[0] - background[0]) * confidence);
@@ -919,22 +962,106 @@ class NoteSpectrogramPlugin extends PluginBase {
         const rowTop = (this.mx - midi) * rowHeight;
         const division = best % MULTI_F0_FINE_DIVISIONS;
         const center = this.pr === 'High'
-            ? rowTop + (MULTI_F0_FINE_DIVISIONS - 1 - division + 0.5) *
-                rowHeight / MULTI_F0_FINE_DIVISIONS
+            ? rowTop + (MULTI_F0_FINE_DIVISIONS - 1 - division + 0.5 -
+                this._peakOffset(historyOffset, best)) * rowHeight / MULTI_F0_FINE_DIVISIONS
             : rowTop + rowHeight / 2;
-        const fade = rowHeight / (MULTI_F0_FINE_DIVISIONS * 2);
-        const top = center - thickness / 2;
-        const bottom = center + thickness / 2;
-        const gradient = context.createLinearGradient(0, top - fade, 0, bottom + fade);
-        const opaque = `rgba(${red}, ${green}, ${blue}, ${signalColor ? signalColor.alpha : this.displayOptions?.transparent ? confidence : 1})`; // theme-allow: RGB channels blend the active theme background and trace colors.
-        const transparent = `rgba(${red}, ${green}, ${blue}, 0)`; // theme-allow: RGB channels blend the active theme background and trace colors.
-        const fadeRatio = fade / (thickness + 2 * fade);
-        gradient.addColorStop(0, transparent);
-        gradient.addColorStop(fadeRatio, opaque);
-        gradient.addColorStop(1 - fadeRatio, opaque);
-        gradient.addColorStop(1, transparent);
-        context.fillStyle = gradient;
-        context.fillRect(column, top - fade, 1, thickness + 2 * fade);
+        const alpha = signalColor ? signalColor.alpha : this.displayOptions?.transparent ? confidence : 1;
+        return {
+            center,
+            half: thickness / 2,
+            fill: `rgba(${red}, ${green}, ${blue}, ${alpha})` // theme-allow: RGB channels blend the active theme background and trace colors.
+        };
+    }
+
+    _volumeShapesForColumn(column, rowHeight, palette) {
+        const historyOffset = column * MULTI_F0_PITCH_COUNT;
+        return this._volumeBarsForColumn(historyOffset).map(bar =>
+            this._volumeBarShape(historyOffset, bar, rowHeight, palette));
+    }
+
+    _paintVolumeBackground(context, x, width, height, rowHeight, palette) {
+        if (this.displayOptions?.transparent) context.clearRect(x, 0, width, height);
+        else for (let midi = this.mn; midi <= this.mx; midi++) {
+            const background = MULTI_F0_BLACK_KEY_CLASSES.has(midi % 12)
+                ? palette.blackBand
+                : palette.whiteBand;
+            context.fillStyle = `rgb(${background[0]}, ${background[1]}, ${background[2]})`; // theme-allow: RGB channels come from the active theme's keyboard bands.
+            context.fillRect(x, (this.mx - midi) * rowHeight, width, rowHeight);
+        }
+        this._paintVolumeGrid(context, x, width, rowHeight);
+    }
+
+    // Paints the columns of the telemetry frame ending at `end` as one span.
+    // Each bar continues a vertically overlapping bar of the previous frame
+    // with a tapered band; unmatched bars start or end with a rounded cap.
+    _paintVolumeFrame(context, end, height, rowHeight, palette, withBackground) {
+        const newest = (this.writeColumn + MULTI_F0_HISTORY_WIDTH - 1) % MULTI_F0_HISTORY_WIDTH;
+        let start = end;
+        let previous = null;
+        for (let step = 1; step < MULTI_F0_HISTORY_WIDTH; step++) {
+            const column = (end - step + MULTI_F0_HISTORY_WIDTH) % MULTI_F0_HISTORY_WIDTH;
+            if (column === newest) break;
+            if (this.volumeFrameEnds[column]) {
+                previous = column;
+                break;
+            }
+            start = column;
+        }
+        const current = this._volumeShapesForColumn(end, rowHeight, palette);
+        const before = previous === null ? [] : this._volumeShapesForColumn(previous, rowHeight, palette);
+        if (!withBackground && current.length === 0 && before.length === 0) return;
+        const links = current.map(shape => {
+            let link = null;
+            let linkDistance = Infinity;
+            for (const candidate of before) {
+                const distance = candidate.center > shape.center
+                    ? candidate.center - shape.center
+                    : shape.center - candidate.center;
+                if (distance < candidate.half + shape.half && distance < linkDistance) {
+                    link = candidate;
+                    linkDistance = distance;
+                }
+            }
+            return link;
+        });
+        const count = (end - start + MULTI_F0_HISTORY_WIDTH) % MULTI_F0_HISTORY_WIDTH + 1;
+        const right = start + count;
+        for (const shift of right > MULTI_F0_HISTORY_WIDTH ? [0, -MULTI_F0_HISTORY_WIDTH] : [0]) {
+            context.save();
+            context.translate(shift, 0);
+            context.beginPath();
+            context.rect(start, 0, count, height);
+            context.clip();
+            if (withBackground) this._paintVolumeBackground(context, start, count, height, rowHeight, palette);
+            context.globalCompositeOperation = palette.volumeCompositeOperation;
+            current.forEach((shape, index) => {
+                const link = links[index];
+                context.beginPath();
+                if (link) {
+                    const gradient = context.createLinearGradient(start, 0, right, 0);
+                    gradient.addColorStop(0, link.fill);
+                    gradient.addColorStop(1, shape.fill);
+                    context.fillStyle = gradient;
+                    context.moveTo(start, link.center - link.half);
+                    context.lineTo(right, shape.center - shape.half);
+                    context.lineTo(right, shape.center + shape.half);
+                    context.lineTo(start, link.center + link.half);
+                    context.closePath();
+                } else {
+                    context.fillStyle = shape.fill;
+                    context.ellipse(right, shape.center, count, shape.half, 0, 0, Math.PI * 2);
+                }
+                context.fill();
+            });
+            for (const shape of before) {
+                if (links.includes(shape)) continue;
+                context.fillStyle = shape.fill;
+                context.beginPath();
+                context.ellipse(start, shape.center, count, shape.half, 0, 0, Math.PI * 2);
+                context.fill();
+            }
+            context.restore();
+        }
     }
 
     _paintVolumeGrid(context, x, width, rowHeight) {
@@ -965,26 +1092,11 @@ class NoteSpectrogramPlugin extends PluginBase {
         if (!this.volumeHistoryDirty) return;
         const context = this.volumeHistoryCanvas.getContext('2d');
         if (!context) return;
-        const visiblePitchCount = this.mx - this.mn + 1;
-        const rowHeight = height / visiblePitchCount;
-        if (this.displayOptions?.transparent) context.clearRect(0, 0, MULTI_F0_HISTORY_WIDTH, height);
-        else for (let midi = this.mn; midi <= this.mx; midi++) {
-            const row = this.mx - midi;
-            const background = MULTI_F0_BLACK_KEY_CLASSES.has(midi % 12)
-                ? palette.blackBand
-                : palette.whiteBand;
-            context.fillStyle = `rgb(${background[0]}, ${background[1]}, ${background[2]})`; // theme-allow: RGB channels come from the active theme's keyboard bands.
-            context.fillRect(0, row * rowHeight, MULTI_F0_HISTORY_WIDTH, rowHeight);
-        }
-        this._paintVolumeGrid(context, 0, MULTI_F0_HISTORY_WIDTH, rowHeight);
-        context.globalCompositeOperation = palette.volumeCompositeOperation;
+        const rowHeight = height / (this.mx - this.mn + 1);
+        this._paintVolumeBackground(context, 0, MULTI_F0_HISTORY_WIDTH, height, rowHeight, palette);
         for (let column = 0; column < MULTI_F0_HISTORY_WIDTH; column++) {
-            const historyOffset = column * MULTI_F0_PITCH_COUNT;
-            for (const bar of this._volumeBarsForColumn(historyOffset)) {
-                this._paintVolumeBar(context, column, historyOffset, bar, rowHeight, palette);
-            }
+            if (this.volumeFrameEnds[column]) this._paintVolumeFrame(context, column, height, rowHeight, palette, false);
         }
-        context.globalCompositeOperation = 'source-over';
         this.volumeHistoryDirty = false;
     }
 
@@ -1003,23 +1115,7 @@ class NoteSpectrogramPlugin extends PluginBase {
         const rowHeight = height / (this.mx - this.mn + 1);
         for (let offset = 0; offset < count; offset++) {
             const column = (startColumn + offset) % MULTI_F0_HISTORY_WIDTH;
-            const historyOffset = column * MULTI_F0_PITCH_COUNT;
-            if (this.displayOptions?.transparent) context.clearRect(column, 0, 1, height);
-            else for (let midi = this.mn; midi <= this.mx; midi++) {
-                const pitchClass = midi % 12;
-                const background = MULTI_F0_BLACK_KEY_CLASSES.has(pitchClass)
-                    ? palette.blackBand
-                    : palette.whiteBand;
-                const rowTop = (this.mx - midi) * rowHeight;
-                context.fillStyle = `rgb(${background[0]}, ${background[1]}, ${background[2]})`; // theme-allow: RGB channels come from the active theme's keyboard bands.
-                context.fillRect(column, rowTop, 1, rowHeight);
-            }
-            this._paintVolumeGrid(context, column, 1, rowHeight);
-            context.globalCompositeOperation = palette.volumeCompositeOperation;
-            for (const bar of this._volumeBarsForColumn(historyOffset)) {
-                this._paintVolumeBar(context, column, historyOffset, bar, rowHeight, palette);
-            }
-            context.globalCompositeOperation = 'source-over';
+            if (this.volumeFrameEnds[column]) this._paintVolumeFrame(context, column, height, rowHeight, palette, true);
         }
     }
 
@@ -1030,7 +1126,7 @@ class NoteSpectrogramPlugin extends PluginBase {
             const centerY = (this.mx - midi + 0.5) * rowHeight;
             const normalized = this._normalizedLevel(this.meterCurrent[note]);
             const signalColor = this.displayOptions?.signalColor?.(midi, normalized);
-            const color = signalColor?.rgb ?? this.displayOptions?.noteColor?.(midi) ?? (this.cl === 'Rainbow'
+            const color = signalColor?.rgb ?? this.displayOptions?.noteColor?.(midi, normalized) ?? (this.cl === 'Rainbow'
                 ? MULTI_F0_NOTE_COLORS[midi % 12]
                 : palette.trace);
             const currentRadius = rowHeight * normalized;
@@ -1069,27 +1165,34 @@ class NoteSpectrogramPlugin extends PluginBase {
 
     drawGraph(now = performance.now()) {
         if (this.displayOptions?.deferDraw) return;
+        const frame = (this._readoutFrame ??= {});
+        frame.valid = false;
         if (!this.canvasCtx || !this.imageData || !this.tempCtx || !this.tempCanvas ||
             !this.canvas) {
+            this._graphReadout?.refresh();
             return;
         }
         const palette = this._displayPalette();
-        if (!palette) return;
+        if (!palette) {
+            this._graphReadout?.refresh();
+            return;
+        }
         const context = this.canvasCtx;
         const horizontal = this.ly === 'Horizontal';
         const width = horizontal ? this.canvas.height : this.canvas.width;
         const height = horizontal ? this.canvas.width : this.canvas.height;
         const dpr = this.graphDpr || 1;
         const showKeyboard = this.displayOptions?.showKeyboard !== false;
-        const keyboardScale = this.displayOptions?.preserveKeyboardAspect
-            ? height / (horizontal ? 1024 : 480) : dpr;
-        const gutter = showKeyboard ? MULTI_F0_HORIZONTAL_KEY_GUTTER_CSS_PX * keyboardScale : 0;
-        const blackKeyDepth = MULTI_F0_KEY_GUTTER_CSS_PX * keyboardScale;
-        const rollWidth = width - gutter;
-        const drawKeyboard = draw => this.displayOptions?.drawKeyboard
-            ? this.displayOptions.drawKeyboard(context, draw, { horizontal, width, height, rollWidth })
-            : draw();
         const visiblePitchCount = this.mx - this.mn + 1;
+        const rowHeight = height / visiblePitchCount;
+        const keyboard = window.FrequencyAxis.keyboardDepths(12 * rowHeight, width,
+            this.displayOptions?.keyboardLength);
+        const gutter = showKeyboard ? keyboard.gutter : 0;
+        const blackKeyDepth = keyboard.blackDepth;
+        const rollWidth = width - gutter;
+        const drawKeyboard = (draw, boundary = false) => this.displayOptions?.drawKeyboard
+            ? this.displayOptions.drawKeyboard(context, draw, { horizontal, width, height, rollWidth, boundary })
+            : draw();
         const displayDivisions = this.pr === 'High' ? MULTI_F0_FINE_DIVISIONS : 1;
         const visibleDisplayPitchCount = visiblePitchCount * displayDivisions;
         const sourceY = (MULTI_F0_LAST_MIDI - this.mx) * displayDivisions;
@@ -1097,7 +1200,10 @@ class NoteSpectrogramPlugin extends PluginBase {
         context.fillStyle = ((this.displayOptions?.themePalette ?? window.ThemePalette)?.get('graph-bg-deep') ?? '');
         if (this.displayOptions?.transparent) context.clearRect(0, 0, this.canvas.width, this.canvas.height);
         else context.fillRect(0, 0, this.canvas.width, this.canvas.height);
-        if (rollWidth <= 0 || height <= 0) return;
+        if (rollWidth <= 0 || height <= 0) {
+            this._graphReadout?.refresh();
+            return;
+        }
 
         const scrollPhase = this._scrollPhase(now);
         this.scrollAnchorPending = false;
@@ -1117,7 +1223,10 @@ class NoteSpectrogramPlugin extends PluginBase {
         }
         if (this.scaledHistoryCanvas.height !== height) this.scaledHistoryCanvas.height = height;
         const scaledContext = this.scaledHistoryCanvas.getContext('2d');
-        if (!scaledContext) return;
+        if (!scaledContext) {
+            this._graphReadout?.refresh();
+            return;
+        }
         if (horizontal) {
             context.save();
             context.translate(this.canvas.width, 0);
@@ -1182,7 +1291,10 @@ class NoteSpectrogramPlugin extends PluginBase {
         if (this.displayOptions?.drawSignal) this.displayOptions.drawSignal(context, drawHistory, { width: rollWidth, height });
         else drawHistory(context);
 
-        const rowHeight = height / visiblePitchCount;
+        Object.assign(frame, {
+            valid: true, horizontal, canvasWidth: this.canvas.width, rollWidth, height, rowHeight,
+            gutter, blackKeyDepth, scrollPhase, columnWidth, phaseOffset, split, palette
+        });
         if (this.vl && this.displayOptions?.separateAnnotations) this._paintVolumeGrid(context, 0, rollWidth, rowHeight);
         context.lineWidth = dpr;
         if (showKeyboard) {
@@ -1190,6 +1302,7 @@ class NoteSpectrogramPlugin extends PluginBase {
                 const latestOffset = ((this.writeColumn + MULTI_F0_HISTORY_WIDTH - 1) %
                     MULTI_F0_HISTORY_WIDTH) * MULTI_F0_PITCH_COUNT;
                 const whiteKeyHeight = 12 * rowHeight / 7;
+                const whiteKeys = [];
                 for (const midi of MULTI_F0_WHITE_KEY_MIDIS) {
                     const pitchClass = midi % 12;
                     const whiteIndex = MULTI_F0_WHITE_KEY_CLASSES.indexOf(pitchClass);
@@ -1202,7 +1315,6 @@ class NoteSpectrogramPlugin extends PluginBase {
                     const clippedEnd = end > height ? height : end;
                     if (clippedStart >= clippedEnd) continue;
                     const confidence = this._bagConfidence(latestOffset, midi);
-                    const best = this._bestBagPitch(latestOffset, midi);
                     const color = this.displayOptions?.noteColor?.(midi) ?? (this.cl === 'Rainbow'
                         ? MULTI_F0_NOTE_COLORS[pitchClass]
                         : palette.trace);
@@ -1216,6 +1328,7 @@ class NoteSpectrogramPlugin extends PluginBase {
                         gutter,
                         clippedEnd - clippedStart
                     );
+                    whiteKeys.push([height - end, height - start, confidence]);
                 }
                 context.strokeStyle = ((this.displayOptions?.themePalette ?? window.ThemePalette)?.get('graph-label') ?? '');
                 for (const midi of MULTI_F0_WHITE_KEY_MIDIS) {
@@ -1231,21 +1344,30 @@ class NoteSpectrogramPlugin extends PluginBase {
                     context.lineTo(width, y);
                     context.stroke();
                 }
+                const blackKeys = [];
                 for (let midi = this.mn; midi <= this.mx; midi++) {
                     const pitchClass = midi % 12;
                     if (!MULTI_F0_BLACK_KEY_CLASSES.has(pitchClass)) continue;
                     const row = this.mx - midi;
                     const confidence = this._bagConfidence(latestOffset, midi);
-                    const best = this._bestBagPitch(latestOffset, midi);
                     const color = this.displayOptions?.noteColor?.(midi) ?? (this.cl === 'Rainbow'
                         ? MULTI_F0_NOTE_COLORS[pitchClass]
                         : palette.trace);
-                    const red = Math.round(34 + (color[0] - 34) * confidence);
-                    const green = Math.round(34 + (color[1] - 34) * confidence);
-                    const blue = Math.round(34 + (color[2] - 34) * confidence);
-                    context.fillStyle = `rgb(${red}, ${green}, ${blue})`; // theme-allow: Fixed signal-level or self-painted colormap color.
-                    context.fillRect(rollWidth, row * rowHeight, blackKeyDepth, rowHeight);
+                    const red = Math.round(palette.blackKey + (color[0] - palette.blackKey) * confidence);
+                    const green = Math.round(palette.blackKey + (color[1] - palette.blackKey) * confidence);
+                    const blue = Math.round(palette.blackKey + (color[2] - palette.blackKey) * confidence);
+                    blackKeys.push([row * rowHeight, (row + 1) * rowHeight, confidence, `rgb(${red}, ${green}, ${blue})`]); // theme-allow: Fixed signal-level or self-painted colormap color.
                 }
+                window.FrequencyAxis.shadeKeyboard(context,
+                    { along: 'y', edge: rollWidth, length: height, gutter, blackDepth: blackKeyDepth, dpr }, blackKeys, () => {
+                        for (const [start, end, , color] of blackKeys) {
+                            context.fillStyle = color;
+                            context.fillRect(rollWidth, start, blackKeyDepth, end - start);
+                        }
+                    }, whiteKeys);
+            });
+            // The meters and border sit on the roll boundary rather than inside the keys.
+            drawKeyboard(() => {
                 const drawMeters = target => this._drawVolumeMeters(target, rollWidth, rowHeight, palette);
                 if (this.displayOptions?.drawSignal) this.displayOptions.drawSignal(context, drawMeters);
                 else drawMeters(context);
@@ -1253,7 +1375,7 @@ class NoteSpectrogramPlugin extends PluginBase {
                 context.moveTo(rollWidth, 0);
                 context.lineTo(rollWidth, height);
                 context.stroke();
-            });
+            }, true);
         }
 
         context.fillStyle = showKeyboard ? '#111' : ((this.displayOptions?.themePalette ?? window.ThemePalette)?.get('graph-label') ?? ''); // theme-allow: Fixed text color only on self-painted piano keys.
@@ -1280,6 +1402,23 @@ class NoteSpectrogramPlugin extends PluginBase {
         context.textAlign = showKeyboard || horizontal ? 'center' : 'right';
         context.textBaseline = 'middle';
         const showPitchLabels = labelFontSize > 0 && (showKeyboard || this.displayOptions?.showAxisNumbers !== false);
+        // Labels sit on keys lit in the note colors or on the newest roll columns; a Visualizer
+        // palette can match the text color, so outline them in the key or background color there.
+        const labelOutline = !this.displayOptions?.visualizerAxisLabels ? null : showKeyboard
+            ? `rgb(${palette.whiteKey}, ${palette.whiteKey}, ${palette.whiteKey})` // theme-allow: Self-painted white key color.
+            : ((this.displayOptions.themePalette ?? window.ThemePalette)?.get('graph-bg-deep') ?? '');
+        const pitchLabel = (label, x, y) => {
+            const text = this.displayOptions?.textContext ?? context;
+            if (labelOutline) {
+                context.save();
+                context.strokeStyle = labelOutline;
+                context.lineWidth = (showKeyboard ? 1.5 : 2) * dpr;
+                context.lineJoin = 'round';
+                text.strokeText(label, x, y);
+                context.restore();
+            }
+            text.fillText(label, x, y);
+        };
         for (let midi = 24; midi <= MULTI_F0_LAST_MIDI; midi++) {
             const isC = midi % 12 === 0;
             if (!isC && midi % 12 !== 5) continue;
@@ -1317,7 +1456,7 @@ class NoteSpectrogramPlugin extends PluginBase {
                         context.translate(width - 2 * dpr, y);
                         context.rotate(-Math.PI / 2);
                         context.textBaseline = 'bottom';
-                        (this.displayOptions?.textContext ?? context).fillText(label, 0, 0);
+                        pitchLabel(label, 0, 0);
                         context.restore();
                     } else {
                         const metrics = context.measureText(label);
@@ -1326,7 +1465,7 @@ class NoteSpectrogramPlugin extends PluginBase {
                         const visualCenterOffset = Number.isFinite(ascent) && Number.isFinite(descent)
                             ? (ascent - descent) / 2
                             : 0;
-                        (this.displayOptions?.textContext ?? context).fillText(label, x, y + visualCenterOffset);
+                        pitchLabel(label, x, y + visualCenterOffset);
                     }
                 };
                 if (showKeyboard) drawKeyboard(drawLabel);
@@ -1334,6 +1473,60 @@ class NoteSpectrogramPlugin extends PluginBase {
             }
         }
         if (horizontal) context.restore();
+        this._graphReadout?.refresh();
+    }
+
+    // Reads the history cell at canvas pixel (x, y); u/v are the unrotated roll coordinates.
+    _readNote(x, y) {
+        const frame = this._readoutFrame;
+        if (!frame?.valid || !this.history) return null;
+        const { format } = window.GraphReadout;
+        const { horizontal, canvasWidth, rollWidth, rowHeight, columnWidth, scrollPhase } = frame;
+        const u = horizontal ? y : x;
+        const v = horizontal ? canvasWidth - x : y;
+        const frequency = midi => 440 * 2 ** ((midi - 69) / 12);
+        if (u >= rollWidth) {
+            const axis = window.FrequencyAxis;
+            const key = axis?.hitKey(axis.noteAxisKeys(this.mn, this.mx, frame.height),
+                frame.height - v, u - rollWidth, frame.gutter, frame.blackKeyDepth);
+            return key ? { cursor: format.note(frequency(key.midi), 440), rows: [], crosshair: 'none' } : null;
+        }
+        const latestStart = rollWidth - (1 + scrollPhase) * columnWidth;
+        const column = u >= latestStart
+            ? (frame.split + MULTI_F0_HISTORY_WIDTH - 1) % MULTI_F0_HISTORY_WIDTH
+            : (frame.split + Math.floor((u + frame.phaseOffset) / columnWidth)) % MULTI_F0_HISTORY_WIDTH;
+        const rowIndex = Math.floor(v / rowHeight);
+        const midi = this.mx - (rowIndex < 0 ? 0 : rowIndex);
+        if (midi < this.mn) return null;
+        const historyOffset = column * MULTI_F0_PITCH_COUNT;
+        const high = this.pr === 'High';
+        const rowTop = (this.mx - midi) * rowHeight;
+        const subRow = Math.floor((v - rowTop) / (rowHeight / MULTI_F0_FINE_DIVISIONS));
+        const division = MULTI_F0_FINE_DIVISIONS - 1 -
+            (subRow < 0 ? 0 : subRow > MULTI_F0_FINE_DIVISIONS - 1 ? MULTI_F0_FINE_DIVISIONS - 1 : subRow);
+        // Snap to the center of the display row under the pointer: a 1/60-octave sub-row in High,
+        // otherwise the semitone row (its center division), whether or not anything sounds there.
+        const pitch = (midi - MULTI_F0_FIRST_MIDI) * MULTI_F0_FINE_DIVISIONS +
+            (high ? division : MULTI_F0_FINE_CENTER);
+        const cellMidi = MULTI_F0_FIRST_MIDI + (pitch - MULTI_F0_FINE_CENTER) / MULTI_F0_FINE_DIVISIONS;
+        const center = rowTop + (MULTI_F0_FINE_DIVISIONS - 1 - pitch % MULTI_F0_FINE_DIVISIONS + 0.5) *
+            rowHeight / MULTI_F0_FINE_DIVISIONS;
+        // High without Volume paints every sub-row cell; otherwise each semitone row shows its strongest cell.
+        const salience = high && !this.vl
+            ? this.history[historyOffset + pitch]
+            : this._bagConfidence(historyOffset, midi);
+        const color = this.cl === 'Rainbow'
+            ? (high ? multiF0InterpolatedNoteColor(pitch) : MULTI_F0_NOTE_COLORS[midi % 12])
+            : frame.palette.trace;
+        const row = {
+            label: 'Salience',
+            color: `rgb(${Math.round(color[0])}, ${Math.round(color[1])}, ${Math.round(color[2])})`, // theme-allow: Same note or theme trace color as the drawn cell.
+            value: format.percent(salience),
+            y: horizontal ? u : center
+        };
+        const cursor = `${format.note(frequency(cellMidi), 440)} · ${
+            format.time(-(rollWidth - u) / columnWidth * this.columnPeriod * 1000)}`;
+        return { cursor, rows: [row], at: horizontal ? { x: canvasWidth - center, y: u } : { x: u, y: center } };
     }
 
     cleanup() {
@@ -1356,6 +1549,7 @@ class NoteSpectrogramPlugin extends PluginBase {
         this.history = null;
         this.intensity = null;
         this.levelHistory = null;
+        this.volumeFrameEnds = null;
         this.levelIntensity = null;
         this.meterCurrent = null;
         super.cleanup();

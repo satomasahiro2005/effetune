@@ -29,7 +29,14 @@ function createElement(document, tagName) {
     nextSibling: null,
     children: [],
     listeners: new Map(),
+    attributes: new Map(),
     style: {},
+    setAttribute(name, value) {
+      this.attributes.set(name, String(value));
+    },
+    getAttribute(name) {
+      return this.attributes.get(name) ?? null;
+    },
     appendChild(child) {
       child.parentNode = this;
       this.children.push(child);
@@ -332,6 +339,9 @@ function createDependencies(calls, options = {}) {
     async showVisualizerView() {
       calls.push(['ui.showVisualizerView']);
     },
+    async openSharedVisualizer(encoded) {
+      calls.push(['ui.openSharedVisualizer', encoded]);
+    },
     deferLibraryStartupView(initialView) {
       calls.push(['ui.deferLibraryStartupView', initialView]);
     },
@@ -395,7 +405,7 @@ function createDependencies(calls, options = {}) {
     async waitForDspActivationBeforeOutput() {
       calls.push(['audio.waitForDspActivationBeforeOutput']);
     },
-    fadeInOutput() { calls.push(['audio.fadeInOutput']); },
+    async fadeInOutputWhenReady() { calls.push(['audio.fadeInOutputWhenReady']); },
     async startPowerPolicyController() {
       calls.push(['audio.startPowerPolicyController']);
       if (options.powerStartReject) throw new Error('power start failed');
@@ -574,8 +584,8 @@ test('bootstrap helpers wire close-state and tray preset listeners', async () =>
         }
       }
     };
-    appBootstrap.registerPipelineStateCloseHandler(mod.getPipelineStateForSave, closeApi);
-    closeCallback();
+    appBootstrap.registerPipelineStateCloseHandler(mod.getPipelineStateForSave, async () => {}, closeApi);
+    await closeCallback();
     assert.deepEqual(calls.find(call => call[0] === 'sendPipelineStateForClose')[1], [{ name: 'Limiter' }]);
 
     const trayApi = {
@@ -736,9 +746,9 @@ test('App initialize handles success, audio warnings, and initialization failure
     await app.initialize();
     assert.equal(app.initialized, true);
     assert.equal(app.hasAudioError, true);
-    assert.equal(calls.some(call => call[0] === 'audio.fadeInOutput'), true);
+    assert.equal(calls.some(call => call[0] === 'audio.fadeInOutputWhenReady'), true);
     assert.ok(calls.findIndex(call => call[0] === 'audio.waitForDspActivationBeforeOutput') <
-      calls.findIndex(call => call[0] === 'audio.fadeInOutput'));
+      calls.findIndex(call => call[0] === 'audio.fadeInOutputWhenReady'));
     assert.equal(calls.some(call =>
       call[0] === 'ui.showTransientMessage' &&
       call[1] === 'error.microphoneAccessDenied' &&
@@ -755,7 +765,7 @@ test('App initialize handles success, audio warnings, and initialization failure
       initAudioResult: 'Audio Error: Microphone access denied. Music file playback mode will still work.'
     }));
     await app.initialize();
-    const fadeIndex = calls.findIndex(call => call[0] === 'audio.fadeInOutput');
+    const fadeIndex = calls.findIndex(call => call[0] === 'audio.fadeInOutputWhenReady');
     const powerIndex = calls.findIndex(call => call[0] === 'audio.startPowerPolicyController');
     const remoteReadyIndex = calls.findIndex(call => call[0] === 'ui.setOpenHomeRemoteRuntimeReady');
     assert.ok(fadeIndex >= 0 && fadeIndex < powerIndex);
@@ -1013,6 +1023,20 @@ test('Visualizer startup distinguishes reflected reloads from explicit URL reque
       assert.equal(calls.some(call => call[0] === 'ui.showVisualizerView'), expected, search);
     });
   }
+});
+
+test('A Visualizer share link is removed from the address at launch and opened once', async () => {
+  const historyState = { effetuneVisualizer: 1 };
+  await withAppModule({ search: '?v=layout&mode=compact', hash: '#x', historyState }, async ({ calls, mod, window }) => {
+    window.appConfig = { startupView: 'library' };
+    const app = new mod.App(createDependencies(calls));
+    assert.deepEqual(calls.find(call => call[0] === 'history.replaceState'),
+      ['history.replaceState', historyState, '', '/effetune.html?mode=compact#x']);
+    await app.applyStartupViewPreference();
+    assert.equal(app.hasExplicitStartupViewRequest(), true);
+    assert.deepEqual(calls.filter(call => call[0].startsWith('ui.show') || call[0] === 'ui.openSharedVisualizer'),
+      [['ui.openSharedVisualizer', 'layout']]);
+  });
 });
 
 test('initialize opens the configured Visualizer before the pipeline UI renders', async () => {
@@ -1365,7 +1389,7 @@ test('event listeners, output-device changes, relaunch, and command-line music c
     document.dispatch('keydown', { key: 'F1', preventDefault() { calls.push(['preventDefault']); } });
     assert.equal(calls.some(call => call[0] === 'preventDefault'), true);
     document.hidden = false;
-    app.audioManager.audioContext = { state: 'suspended', resume() { calls.push(['audioContext.resume']); } };
+    app.audioManager.contextManager.resumeAudioContext = () => calls.push(['audioContext.resume']);
     document.dispatch('visibilitychange');
     assert.equal(calls.some(call => call[0] === 'audioContext.resume'), true);
     assert.equal(mediaDevices.listener instanceof Function, true);
@@ -1933,8 +1957,11 @@ test('update notification offers installer download only on supported Electron b
   }, { documentRef: document, windowRef });
   assert.equal(notification.children.length, 2);
   assert.equal(notification.children[0].textContent, 'Version 2.10.0');
-  assert.equal(notification.children[1].textContent, 'Localized download');
-  assert.equal(notification.children[1].title, 'Localized restart notice');
+  assert.equal(notification.children[1].textContent, '');
+  assert.match(notification.children[1].innerHTML, /<svg\b[^>]*aria-hidden="true"/);
+  assert.equal(notification.children[1].title, 'Localized download\nLocalized restart notice');
+  assert.equal(notification.children[1].getAttribute('aria-label'), 'Localized download');
+  assert.equal(notification.children[1].getAttribute('aria-description'), 'Localized restart notice');
 
   notification.children[0].click();
   assert.deepEqual(calls[0], ['openExternal', 'https://example.test/release']);
@@ -1943,13 +1970,17 @@ test('update notification offers installer download only on supported Electron b
   downloadButton.click();
   downloadButton.click();
   assert.equal(downloadButton.disabled, true);
-  assert.equal(downloadButton.textContent, 'Localized downloading');
+  assert.equal(downloadButton.textContent, '');
+  assert.equal(downloadButton.title, 'Localized downloading');
+  assert.equal(downloadButton.getAttribute('aria-label'), 'Localized downloading');
   assert.equal(calls.filter(call => call[0] === 'downloadUpdate').length, 1);
 
   finishDownload({ success: false });
   await flushMicrotasks();
   assert.equal(downloadButton.disabled, false);
-  assert.equal(downloadButton.textContent, 'Localized download');
+  assert.equal(downloadButton.textContent, '');
+  assert.equal(downloadButton.title, 'Localized download\nLocalized restart notice');
+  assert.equal(downloadButton.getAttribute('aria-label'), 'Localized download');
   assert.deepEqual(calls.at(-1), ['setError', 'ui.updateDownloadFailed', true]);
 });
 
@@ -1994,6 +2025,79 @@ test('app activation and user interaction resume power-managed audio through one
       'resume',
       'pageshow'
     ]);
+  });
+});
+
+test('Windows resume is forwarded while hidden and interaction recovery belongs to the power controller', async () => {
+  let onSystemResume;
+  await withAppModule({ electronAPI: { onSystemResume(callback) { onSystemResume = callback; } } },
+    async ({ calls, document, mod }) => {
+      const deps = createDependencies(calls);
+      deps.audioManager.needsSystemResumeRecovery = false;
+      deps.audioManager.handleSystemResume = async () => {
+        calls.push(['audio.systemResume']);
+        return '';
+      };
+      deps.audioManager.recoverFromSystemResume = () => assert.fail('App must use the common activation path');
+      deps.audioManager.powerPolicyController = {
+        enabled: true,
+        requestResumeFromUserInteraction: async () => { calls.push(['power.resumeFromInteraction']); }
+      };
+      const app = new mod.App(deps);
+      app.setupEventListeners();
+      document.hidden = true;
+      onSystemResume();
+      await flushMicrotasks();
+      assert.equal(calls.some(call => call[0] === 'audio.systemResume'), true);
+      assert.equal(calls.some(call => call[0] === 'power.resumeFromInteraction'), false);
+      document.hidden = false;
+      deps.audioManager.needsSystemResumeRecovery = true;
+      document.dispatch('keydown');
+      await flushMicrotasks();
+      const activationIndex = calls.findIndex(call => call[0] === 'power.resumeFromInteraction');
+      assert.ok(activationIndex >= 0);
+      assert.equal(calls.some(call => call[0] === 'location.reload'), false);
+
+      deps.audioManager.powerPolicyController.requestResumeFromUserInteraction = async () => {
+        throw new Error('deferred recovery failed');
+      };
+      document.dispatch('keydown');
+      await flushMicrotasks();
+      assert.ok(calls.some(call => call[0] === 'ui.setError' && call[1] === 'error.audioResetFailed'));
+
+      deps.audioManager.handleSystemResume = async () => 'Audio Error: internal device error';
+      onSystemResume();
+      await flushMicrotasks();
+      assert.ok(calls.some(call => call[0] === 'ui.setError' && call[1] === 'error.audioResetFailed'));
+      deps.audioManager.handleSystemResume = async () => { throw new Error('native failure'); };
+      onSystemResume();
+      await flushMicrotasks();
+      assert.ok(calls.some(call => call[0] === 'console.warn' &&
+        call[1] === 'Audio recovery after system resume failed:'));
+    });
+});
+
+test('disabled-policy interactions retry recovery through the shared context boundary', async () => {
+  await withAppModule({}, async ({ calls, document, mod }) => {
+    const deps = createDependencies(calls);
+    deps.audioManager.powerPolicyController = { enabled: false };
+    deps.audioManager.needsSystemResumeRecovery = true;
+    deps.audioManager.audioContext = { state: 'running', resume() { assert.fail('raw context resume'); } };
+    let resumes = 0;
+    deps.audioManager.contextManager.resumeAudioContext = async () => {
+      if (++resumes === 1) throw new Error('recovery failed');
+      deps.audioManager.needsSystemResumeRecovery = false;
+    };
+    new mod.App(deps).setupEventListeners();
+    document.hidden = false;
+    document.dispatch('keydown');
+    await flushMicrotasks();
+    assert.equal(resumes, 1);
+    assert.ok(calls.some(call => call[0] === 'ui.setError' && call[1] === 'error.audioResetFailed'));
+    document.dispatch('keydown');
+    await flushMicrotasks();
+    assert.equal(resumes, 2);
+    assert.equal(deps.audioManager.needsSystemResumeRecovery, false);
   });
 });
 

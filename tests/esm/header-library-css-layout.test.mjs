@@ -17,7 +17,7 @@ function getRule(css, selector) {
 }
 
 test('desktop view switch buttons match neighboring header icon button size', () => {
-  const css = readCss('../../effetune.css');
+  const css = readCss('../../css/effetune.css');
   const viewButtonRule = getRule(css, '.view-switch-button');
   const desktopSubtitleContainerRule = getRule(css, 'body:not(.layout-mobile) .subtitle-container');
   const html = fs.readFileSync(new URL('../../effetune.html', import.meta.url), 'utf8');
@@ -31,17 +31,20 @@ test('desktop view switch buttons match neighboring header icon button size', ()
   assert.match(desktopSubtitleContainerRule, /height:\s*36px;/);
 });
 
-test('mobile header hides desktop controls and reserves overflow-menu space', () => {
-  const css = readCss('../../effetune-mobile.css');
+test('mobile header shows Visualizer beside the overflow menu and reserves space for both', () => {
+  const css = readCss('../../css/effetune-mobile.css');
 
-  assert.match(getRule(css, 'body.layout-mobile h1'), /padding-right:\s*48px;/);
-  assert.match(getRule(css, 'body.layout-mobile .header-buttons'), /display:\s*none !important;/);
+  assert.match(getRule(css, 'body.layout-mobile h1'), /padding-right:\s*calc\(2 \* var\(--et-mobile-control-height\) \+ 16px\);/);
+  const headerButtonsRule = getRule(css, 'body.layout-mobile .header-buttons');
+  assert.match(headerButtonsRule, /display:\s*flex;/);
+  assert.match(headerButtonsRule, /right:\s*calc\(var\(--et-mobile-control-height\) \+ 8px\);/);
   assert.match(getRule(css, 'body.layout-mobile .header-buttons .effect-pipeline-button'), /display:\s*none !important;/);
   assert.match(getRule(css, 'body.layout-mobile .header-buttons .open-library-button'), /display:\s*none !important;/);
+  assert.match(getRule(css, 'body.layout-mobile .header-buttons .settings-menu-container'), /display:\s*none !important;/);
 });
 
 test('desktop library view keeps the effect layout width as its sizing basis', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const desktopRule = getRule(css, 'body.view-library:not(.layout-mobile) .main-container');
   const mobileRule = getRule(css, 'body.layout-mobile.view-library .main-container');
 
@@ -54,7 +57,7 @@ test('desktop library view keeps the effect layout width as its sizing basis', (
 });
 
 test('library action status uses an overlay toast without affecting document layout', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const toastRule = getRule(css, '.library-paged-action-toast');
 
   assert.match(toastRule, /position:\s*fixed;/);
@@ -62,7 +65,7 @@ test('library action status uses an overlay toast without affecting document lay
 });
 
 test('library playlist actions keep action-bar spacing when controls wrap', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const actionsRule = getRule(css, '.library-playlist-actions');
 
   assert.match(actionsRule, /display:\s*flex;/);
@@ -73,7 +76,7 @@ test('library playlist actions keep action-bar spacing when controls wrap', () =
 });
 
 test('folder detail headers override the fixed base section height', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const folderHeaderRule = getRule(css, '.library-section-head.library-folder-detail-head');
 
   assert.match(folderHeaderRule, /height:\s*auto;/);
@@ -81,7 +84,7 @@ test('folder detail headers override the fixed base section height', () => {
 });
 
 test('library sort options follow the shared theme', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const selectRule = getRule(css, '.library-entity-sort-select {');
   const optionRule = getRule(css, '.library-entity-sort-select option');
 
@@ -92,7 +95,7 @@ test('library sort options follow the shared theme', () => {
 });
 
 test('mobile library screen keeps scrolling inside the content pane', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const bodyRule = getRule(css, 'body.layout-mobile.view-library {');
   const shellRule = getRule(css, 'body.layout-mobile.view-library .mobile-library-view');
   const viewRule = getRule(css, 'body.layout-mobile.view-library .library-view,\nbody.view-library.layout-mobile .library-view');
@@ -113,7 +116,7 @@ test('mobile library screen keeps scrolling inside the content pane', () => {
 });
 
 test('paged track rows reveal selection controls only after mobile selection mode starts', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const rowRule = getRule(css, 'body.layout-mobile .library-paged-row {');
   const playlistRowRule = getRule(css, 'body.layout-mobile .library-paged-playlist-items .library-paged-row');
   const inactiveRowRule = getRule(
@@ -159,7 +162,7 @@ test('paged track rows reveal selection controls only after mobile selection mod
 });
 
 test('desktop library view uses measured viewport height with a usable minimum', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const rootRule = getRule(css, ':root');
   const desktopLibraryRule = getRule(css, 'body.view-library:not(.layout-mobile) .library-view');
 
@@ -169,8 +172,8 @@ test('desktop library view uses measured viewport height with a usable minimum',
 });
 
 test('desktop library panels match the audio player inner spacing', () => {
-  const appCss = readCss('../../effetune.css');
-  const libraryCss = readCss('../../effetune-library.css');
+  const appCss = readCss('../../css/effetune.css');
+  const libraryCss = readCss('../../css/effetune-library.css');
   const audioPlayerRule = getRule(appCss, '.audio-player');
   const desktopLibraryNavRule = getRule(libraryCss, 'body.view-library:not(.layout-mobile) .library-nav');
   const desktopLibraryHeaderRule = getRule(libraryCss, 'body.view-library:not(.layout-mobile) .library-header');
@@ -181,7 +184,7 @@ test('desktop library panels match the audio player inner spacing', () => {
 });
 
 test('desktop library content keeps the scrollbar inside the right inset', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const contentRule = getRule(css, '.library-content');
   const desktopContentRule = getRule(css, 'body.view-library:not(.layout-mobile) .library-content');
 
@@ -192,7 +195,7 @@ test('desktop library content keeps the scrollbar inside the right inset', () =>
 });
 
 test('desktop library track headers align with track row columns', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const headerRule = getRule(css, '.library-track-header {');
   const rowRule = getRule(css, '\n.library-paged-row {\n');
   const desktopRowRule = getRule(css, 'body:not(.layout-mobile) .library-paged-tracks .library-paged-row');
@@ -207,7 +210,7 @@ test('desktop library track headers align with track row columns', () => {
 });
 
 test('library metadata stays within the content width for long values', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const desktopLibraryRule = getRule(css, 'body.view-library:not(.layout-mobile) .library-view');
   const sectionRule = getRule(css, '.library-section-head {');
   const sectionTitleRule = getRule(css, '.library-section-head h2 {');
@@ -257,14 +260,14 @@ test('library metadata stays within the content width for long values', () => {
 });
 
 test('desktop library view hides the plugin list toggle button', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const desktopSidebarRule = getRule(css, 'body.view-library:not(.layout-mobile) .sidebar-button');
 
   assert.match(desktopSidebarRule, /display:\s*none;/);
 });
 
 test('library status actions align to the library content inner edge', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const statusRule = getRule(css, '.library-status');
   const desktopStatusButtonRule = getRule(css, 'body.view-library:not(.layout-mobile) .library-status-button');
   const mobileStatusRule = getRule(css, 'body.layout-mobile .library-status');
@@ -275,7 +278,7 @@ test('library status actions align to the library content inner edge', () => {
 });
 
 test('library navigation counts align lower with their labels', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const navItemRule = getRule(css, '.library-nav-item');
   const countRule = getRule(css, '.library-count');
 
@@ -286,7 +289,7 @@ test('library navigation counts align lower with their labels', () => {
 });
 
 test('desktop empty library icon has a bounded display size', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const emptyIconRule = getRule(css, 'body.view-library:not(.layout-mobile) .library-empty-icon');
 
   assert.match(emptyIconRule, /width:\s*96px;/);
@@ -294,7 +297,7 @@ test('desktop empty library icon has a bounded display size', () => {
 });
 
 test('paged library artwork images stay centered within the artwork frame', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const artworkRule = getRule(css, '.library-paged-artwork {');
   const imageRule = getRule(css, '.library-artwork-image');
 
@@ -312,7 +315,7 @@ test('paged library artwork images stay centered within the artwork frame', () =
 });
 
 test('library album card play button uses the mobile primary player styling', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const playRule = getRule(css, '.library-card-play {');
   const iconRule = getRule(css, '.library-card-play svg');
 
@@ -329,7 +332,7 @@ test('library album card play button uses the mobile primary player styling', ()
 });
 
 test('library card play buttons use equal horizontal and vertical artwork insets', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const playRule = getRule(css, '.library-card-play {');
   const artworkRule = getRule(css, '.library-paged-media-card .library-paged-artwork');
   const titleRule = getRule(css, '.library-card-title {');
@@ -344,7 +347,7 @@ test('library card play buttons use equal horizontal and vertical artwork insets
 });
 
 test('mobile library card metadata stays below artwork without changing the desktop card grid', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const cardRule = getRule(css, '.library-paged-media-card');
   const mobileMediaCardRule = getRule(
     css,
@@ -366,7 +369,7 @@ test('mobile library card metadata stays below artwork without changing the desk
 });
 
 test('paged media-card artwork keeps the v2 square frame and record placeholder', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const cardRule = getRule(css, '.library-paged-row.library-paged-entity-card.library-paged-media-card');
   const artworkRule = getRule(css, '.library-paged-artwork {');
   const placeholderRule = getRule(css, '.library-paged-artwork > span,\n.library-paged-artwork.library-artwork-error::after');
@@ -384,7 +387,7 @@ test('paged media-card artwork keeps the v2 square frame and record placeholder'
 });
 
 test('paged entity cards keep inter-card spacing while reaching both grid edges', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const cardRule = getRule(css, '.library-paged-row.library-paged-entity-card');
   const folderRule = getRule(css, '.library-paged-grid .library-paged-folder-row');
   const nameRule = getRule(css, '.library-paged-folder-main');
@@ -406,7 +409,7 @@ test('paged entity cards keep inter-card spacing while reaching both grid edges'
 });
 
 test('library album card titles reserve line height for descenders', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const titleRule = getRule(css, '.library-card-title {');
 
   assert.match(titleRule, /font-size:\s*14px;/);
@@ -415,7 +418,7 @@ test('library album card titles reserve line height for descenders', () => {
 });
 
 test('library icon buttons keep a 30px content square', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const iconButtonRule = getRule(css, '.library-icon-button {');
 
   assert.match(iconButtonRule, /box-sizing:\s*content-box;/);
@@ -425,7 +428,7 @@ test('library icon buttons keep a 30px content square', () => {
 });
 
 test('library view reuses the main effect surface theme', () => {
-  const css = readCss('../../effetune-library.css');
+  const css = readCss('../../css/effetune-library.css');
   const rootRule = getRule(css, ':root');
   const viewRule = getRule(css, '.library-view');
   const searchRule = getRule(css, '.library-search {');

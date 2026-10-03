@@ -1,3 +1,4 @@
+import { LIBRARY_STYLESHEET, PIPELINE_ANALYZER_STYLESHEET } from './utils/app-stylesheets.js';
 import { normalizeThemeId, getThemePreset } from './theme-registry.mjs';
 import { PluginListManager } from './ui/plugin-list-manager.js';
 import { PipelineManager } from './ui/pipeline-manager.js';
@@ -13,7 +14,8 @@ import {
 } from './utils/serialization-utils.js';
 import {
     encodePipelineState,
-    decodePipelineState
+    decodePipelineState,
+    createShareUrl
 } from './utils/pipeline-state-codec.js';
 import { copyTextToClipboard, readTextFromClipboard } from './utils/clipboard-utils.js';
 import { LayoutModeManager } from './ui/layout-mode-manager.js';
@@ -24,6 +26,7 @@ import { normalizeMusicLibraryStartupView } from './library/constants.js';
 import { PowerStateView } from './ui/power-state-view.js';
 import { installRangePrecisionControl } from './ui/range-precision-controller.js';
 import { installRangeFillStyling, updateRangeFill } from './ui/range-fill.js';
+import { enableStandardSelects } from './ui/standard-select.js';
 import { loadClassicScript, loadStylesheet, waitForStylesheets } from './utils/classic-script-loader.js';
 import {
     collectUniquePipelinePlugins,
@@ -79,7 +82,7 @@ function loadAudioPlayerClass() {
 
 function loadLibraryFeatureModules() {
     if (!libraryFeatureModulesPromise) {
-        loadStylesheet('effetune-library.css');
+        loadStylesheet(LIBRARY_STYLESHEET);
         libraryFeatureModulesPromise = Promise.all([
             import('./library/library-manager-v2.js'),
             import('./ui/library/library-view.js'),
@@ -115,7 +118,7 @@ function loadWebPlaybackResolvers() {
 
 function loadPipelineAnalyzerModules() {
     if (!pipelineAnalyzerModulesPromise) {
-        loadStylesheet('pipeline-analyzer.css');
+        loadStylesheet(PIPELINE_ANALYZER_STYLESHEET);
         pipelineAnalyzerModulesPromise = Promise.all([
             import('./pipeline-analyzer/controller.js'),
             import('./pipeline-analyzer/ui.js')
@@ -177,6 +180,7 @@ export class UIManager {
     constructor(pluginManager, audioManager) {
         this.pluginManager = pluginManager;
         this.audioManager = audioManager;
+        enableStandardSelects(document);
         this.debugChannelCount = null;
 
         // Set directly in UIManager to maintain original behavior
@@ -345,6 +349,7 @@ export class UIManager {
             this.initClipboardButtons();
             // Initialize history buttons after translations are loaded
             this.initHistoryButtons();
+            this.updateEditButtons();
             // Initialize pipeline toggle buttons after translations are loaded
             this.initPipelineToggleButtons();
             // Initialize keyboard shortcuts
@@ -1565,9 +1570,7 @@ export class UIManager {
                 const attemptRevision = ++this.shareAttemptRevision;
                 const pipeline = [...this.audioManager.pipeline];
                 const state = this.getPipelineState(pipeline);
-                const newURL = new URL('https://effetune.frieve.com/effetune.html');
-                newURL.searchParams.set('p', state);
-                const copied = await copyTextToClipboard(newURL.toString());
+                const copied = await copyTextToClipboard(createShareUrl('p', state));
                 if (attemptRevision !== this.shareAttemptRevision) return;
                 if (copied) {
                     this.showTransientMessage('success.urlCopied', false, {}, 3000);
@@ -1987,7 +1990,7 @@ export class UIManager {
     showLibraryRecoveryShell() {
         // The shell is displayed without loading the library feature modules, so the
         // stylesheet they normally pull in has to be requested here as well.
-        loadStylesheet('effetune-library.css');
+        loadStylesheet(LIBRARY_STYLESHEET);
         const root = this.ensureLibraryRecoveryShell();
         if (!root) return false;
         this.renderLibraryRecoveryShell();
@@ -2214,12 +2217,7 @@ export class UIManager {
         }
         if ((this.miniPlayerMode || this.miniPlayerTargetMode) && !await this.setMiniPlayerMode(false)) return false;
         if (document.body.classList.contains('view-library') && this.libraryView?.hasActiveDialog?.()) return false;
-        if (!this.visualizerView) {
-            this.visualizerModulePromise ||= import('./visualizer/visualizer-view.js');
-            const { VisualizerView } = await this.visualizerModulePromise;
-            this.visualizerView ||= new VisualizerView(this);
-        }
-        await this.visualizerView.initialized;
+        await this.ensureVisualizerView();
         if (revision !== this.visualizerOpenRevision || this.isDoubleBlindActive()) return false;
         this.visualizerView.previousMobileView = this.mobileNav?.getCurrentView() || 'player';
         this.hideLibraryView({ restoreFocus: false });
@@ -2228,6 +2226,42 @@ export class UIManager {
         this.mobileNav?.applyViewState('visualizer', { fromLibraryView: true });
         this.visualizerView.updateVisibility();
         return true;
+    }
+
+    async ensureVisualizerView() {
+        if (!this.visualizerView) {
+            this.visualizerModulePromise ||= import('./visualizer/visualizer-view.js');
+            const { VisualizerView } = await this.visualizerModulePromise;
+            this.visualizerView ||= new VisualizerView(this);
+        }
+        await this.visualizerView.initialized;
+    }
+
+    // Electron clean feed: the main process shows it only while no Double Blind Test
+    // could reveal track details.
+    reportVisualizerFeedAllowed() {
+        const api = window.electronAPI;
+        if (typeof api?.setVisualizerFeedAllowed !== 'function') return;
+        this.stopVisualizerFeedState ||= api.onVisualizerFeedState(state => this.applyVisualizerFeedState(state));
+        const allowed = !this.isDoubleBlindActive();
+        if (allowed === this.visualizerFeedAllowed) return;
+        this.visualizerFeedAllowed = allowed;
+        api.setVisualizerFeedAllowed(allowed).then(state => this.applyVisualizerFeedState(state),
+            error => console.warn('Unable to update the Visualizer clean feed:', error));
+    }
+
+    async applyVisualizerFeedState(state) {
+        this.visualizerFeedState = state;
+        try {
+            if (state?.open) await this.ensureVisualizerView();
+            this.visualizerView?.setFeedState(this.visualizerFeedState);
+        } catch (error) {
+            console.error('Visualizer clean feed could not be opened:', error);
+        }
+    }
+
+    async openSharedVisualizer(encoded) {
+        if (await this.showVisualizerView()) await this.visualizerView.importShared(encoded);
     }
 
     hideVisualizerView(options = {}) {
@@ -2286,6 +2320,7 @@ export class UIManager {
         if (this.isDoubleBlindActive() && document.body?.classList.contains('view-visualizer')) this.hideVisualizerView();
         if (this.visualizerButton) this.visualizerButton.disabled = this.isDoubleBlindActive();
         this.visualizerView?.updateVisibility();
+        this.reportVisualizerFeedAllowed();
         const hidden = this.isEffectPipelineHidden();
         if (hidden === this.effectPipelineHidden) return;
         this.effectPipelineHidden = hidden;
@@ -2544,6 +2579,18 @@ export class UIManager {
     }
 
     /**
+     * Disable the pipeline Undo, Redo, Cut, and Copy buttons when they have nothing to act on
+     */
+    updateEditButtons() {
+        const history = this.pipelineManager?.historyManager;
+        const noSelection = !this.pipelineManager?.core?.selectedPlugins?.size;
+        if (this.undoButton) this.undoButton.disabled = !history?.canUndo;
+        if (this.redoButton) this.redoButton.disabled = !history?.canRedo;
+        if (this.cutButton) this.cutButton.disabled = noSelection;
+        if (this.copyButton) this.copyButton.disabled = noSelection;
+    }
+
+    /**
      * Initialize pipeline toggle buttons and menu
      */
     initPipelineToggleButtons() {
@@ -2610,7 +2657,7 @@ export class UIManager {
     }
 
     /**
-     * Switch to a specific pipeline with the same output dip as the A/B toggle.
+     * Switch to a specific pipeline, letting the worklet output gate hide the change.
      * @param {string} pipeline - 'A' or 'B'
      */
     async switchPipelineWithTransition(pipeline) {

@@ -554,6 +554,59 @@ is 1; `TAP_SCOPE_SNAPSHOT` (type 3), `TAP_STEREO_FIELD` (type 6), and
   Public JavaScript and Python decoders expose this as
   `PitchMeterTelemetryFrame` with `kind` `pitch`.
 
+- **Type 27 — `TAP_ANALOG_METER`.** Format version 1 is a 4-byte header
+  followed by `channelCount` 8-byte records, plus a 24-byte program record in
+  Loudness mode, for an exact payload size of `4 + 8 * channelCount` bytes
+  (`+ 24` in Loudness). The header contains `u8` mode (0 VU, 1 PPM, 2 RMS,
+  3 Sample Peak, 4 True Peak, 5 Loudness), `u8` channel count (1-16), and `u16`
+  flags: bit 0 marks a valid Integrated value and bit 1 a valid LRA, and both
+  are zero outside Loudness. Outside Loudness each record holds the float32
+  needle level in dB and the float32 maximum in dB since the last accepted
+  frame; VU and RMS read a sine at its peak level. In Loudness each record holds
+  that channel's unweighted, ungated Momentary and Short-term loudness in LUFS,
+  and the program record holds float32 Momentary, Short-term, Integrated, and
+  LRA, the maximum true peak in dBTP, and the Integrated accumulation time in
+  seconds. Integrated and LRA read zero while their flag bits are clear. Levels
+  are floored at -240 dB, and true peaks above 0 dBFS are not clamped. Public
+  JavaScript and Python decoders expose this as `AnalogMeterTelemetryFrame`
+  with `kind` `analogMeter`.
+
+- **Type 28 — `TAP_RHYTHM_ANALYZER`.** Format version 1 is exactly 1344 bytes.
+  A 32-byte header holds float32 sample rate, `u32` non-zero analysis
+  generation, envelope hop in samples, and envelope frame count `E`, float32
+  observation time and latency in seconds, `u32` count of events dropped since
+  the previous accepted frame, and `u32` current event count. A 32-byte tracker
+  record follows: `u32` flags (bit 0 marks a locked beat grid), `u32` lock
+  epoch, float32 confidence and period in seconds, `u32` next-beat envelope
+  frame, float32 fraction of that frame, `u32` next-beat index, and float32
+  best comb tempo in BPM. While
+  unlocked, period and next-beat fields are zero. 192 float32 tempogram values
+  from 0-1 follow, then 16 event slots of 32 bytes, of which the first
+  `eventCount` are valid: `u32` envelope frame, float32 fraction, `u32` lock
+  epoch, `i32` beat index, float32 beat fraction from 0-1 and period in
+  seconds, float32 onset strength, `u8` band (0 low, 1 mid, 2 high), `u8`
+  flags (bit 0 marks an onset outside a locked grid), and a zero `u16`.
+  Public JavaScript and Python decoders expose this as
+  `RhythmAnalyzerTelemetryFrame` with `kind` `rhythmAnalyzer`.
+
+- **Type 29 — `TAP_TONAL_BALANCE_EQ`.** Format version 1 is exactly 1564
+  bytes, emitted at most 15 times per second. A 24-byte header holds float32
+  sample rate, `u16` band count (41) and grid count (128), `u8` state flags
+  (bit 0 the last 400 ms block passed the -70 LKFS absolute gate, bit 1 it also
+  passed the relative gate, bit 2 a valid integrated loudness, bit 3 a target
+  with data), `u8` target index, a zero `u16`, float32 integrated gated
+  loudness in LKFS (zero while bit 2 is clear) and make-up gain in dB, and
+  `u32` gated-in analysis hop count. Six float32 arrays of 41 values follow
+  for ERB-rate bands `f_b = (10^((b+1)/21.4) - 1) * 1000 / 4.37` Hz (26 Hz to
+  18.6 kHz): measured level in dB on the Average SPL scale, persistence and
+  presence from 0-1, the correction command in dB, and the active target mean
+  and standard deviation in dB. 41 `u8` band flags follow (bit 0 stationary,
+  bit 1 noise floor, bit 2 has target, bit 3 has level, bit 4 inside Low-High),
+  then three zero bytes and 128 float32 values of the applied response,
+  including make-up gain, in dB at `20 * 1000^(i/127)` Hz. Public JavaScript
+  and Python decoders expose this as `TonalBalanceEQTelemetryFrame` with `kind`
+  `tonalBalance`.
+
 ### Latency and Pipeline Descriptors
 
 `et_instance_latency` reflects staged parameters immediately.

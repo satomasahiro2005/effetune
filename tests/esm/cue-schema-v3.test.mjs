@@ -86,9 +86,10 @@ test('scan_logical_seen keys generations by logical storage identity', () => {
 });
 
 test('Electron and Web expose the same bounded CUE staging actions', async () => {
+  const core = await readFile(new URL('../../js/library/repository/catalog-runtime-core.js', import.meta.url), 'utf8');
   const [electron, web, host, repository] = await Promise.all([
-    readFile(new URL('../../electron/library-catalog-worker.cjs', import.meta.url), 'utf8'),
-    readFile(new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url), 'utf8'),
+    readFile(new URL('../../electron/library-catalog-worker.cjs', import.meta.url), 'utf8').then(source => source + '\n' + core),
+    readFile(new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url), 'utf8').then(source => source + '\n' + core),
     readFile(new URL('../../electron/library-catalog-host.cjs', import.meta.url), 'utf8'),
     readFile(new URL('../../js/library/repository/web-catalog-repository.js', import.meta.url), 'utf8')
   ]);

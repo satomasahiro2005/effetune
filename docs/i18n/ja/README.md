@@ -20,7 +20,7 @@
 
 ## 紹介動画
 
-[![YouTube Video](../../../images/video_thumbnail.jpg)](https://www.youtube.com/watch?v=--mtsy1t4HI)
+[![YouTube Video](../../../images/video_thumbnail.jpg)](https://www.youtube.com/watch?v=Qb5Airg0kI8)
 
 ## コンセプト
 
@@ -58,7 +58,7 @@ EffeTuneを使う前に、オーディオルーティングの設定が必要で
    - またはファイルメニューから「音楽ファイルを開く...」を選択する（デスクトップアプリのみ）
    - または音楽ファイルをウィンドウにドラッグする
 - 音楽ファイルプレーヤーだけで使う場合は、オーディオ設定の入力デバイスで「なし（音楽ファイルプレーヤー専用）」を選ぶと、ライブ入力を使わずに再生できます
-- Shuffleの隣にある再生速度ボタンを押すとポップアップが開きます。9種類のプリセットから選ぶか、横スライダーまたは数値入力で0.25x〜4xの速度を0.01x刻みで設定できます。速度を変えても音程は保たれます。
+- Shuffleの隣にある再生速度ボタンを押すとポップアップが開きます。9種類のプリセットから選ぶか、横スライダーまたは数値入力で0.25x〜4xの速度を0.01x刻みで設定できます。その横にある**ピッチ固定**ボタンは既定でオンになっており、速度を変えてもピッチが保たれます。オフにすると、テープやレコードの回転速度を変えたときのように、速度に応じてピッチも上下します。
 
 ### ストリーミングサービスのセットアップ
 
@@ -281,6 +281,8 @@ Effect Pipelineヘッダーの **パイプラインプリセット** ボタン�
 4. EffeTuneに直接インポート可能なパラメトリックEQ補正を生成する
 5. 補正を適用して、より正確でニュートラルなサウンド再生を実現する
 
+**出力デバイスのチャンネル数** を出力デバイスの構成に合わせて設定してください。5.1chなら **6**、7.1chなら **8** です。出力チャンネルやチャンネル別の帯域設定の選択肢は、この範囲内に表示されます。一部のチャンネルだけを選んだ場合も、テスト信号、測定、個別チャンネルの再測定にはこのチャンネル数を使用します。たとえば5.1chデバイスでCh 3（センター）とCh 4（サブウーファー）だけを測定する場合も、**6** に設定してください。
+
 マルチチャンネルのシステムでは、**全チャンネル** を選ぶとすべての出力を同時に測定でき、個別の **出力チャンネル** を選ぶと1つずつ測定できます。**詳細設定** で、スイープの帯域制限を **Off**、**全チャンネル共通**、**チャンネル別** から選びます。**チャンネル別** では、**設定チャンネル** を使って選択した各出力チャンネルの周波数範囲を設定します。レベル調整では、**チャンネルモード** は最初 **自動切り替え** です。必要に応じてテスト信号チャンネルを選ぶか、**手動** に切り替えます。
 
 インパルス応答のWAVファイルがある場合は、**インポート** から選択してください。WAVの各チャンネルが測定結果として保存され、Room EQなど、保存済み測定を利用する機能から選択できるようになります。
@@ -339,10 +341,12 @@ Effect Pipelineヘッダーの **パイプラインプリセット** ボタン�
 
 | カテゴリ    | エフェクト             | 説明                                                                  | ドキュメント                                             |
 |-----------|---------------------|---------------------------------------------------------------------|---------------------------------------------------------|
+| Analyzer  | Analog Meter        | VU・PPM・ピーク・ラウドネスに対応した指針メーターでレベルを表示 | [詳細](plugins/analyzer.md#analog-meter)              |
 | Analyzer  | Level Meter         | ピークホールド機能付きのオーディオレベルを表示                                     | [詳細](plugins/analyzer.md#level-meter)               |
 | Analyzer  | Note Spectrogram | 推定した音高を時間に沿ったピアノロールで表示                                       | [詳細](plugins/analyzer.md#note-spectrogram)       |
 | Analyzer  | Oscilloscope        | リアルタイムで波形を可視化                                                   | [詳細](plugins/analyzer.md#oscilloscope)              |
 | Analyzer  | Pitch Meter | 1つの基音とチューニングの変化を表示                                                    | [詳細](plugins/analyzer.md#pitch-meter)             |
+| Analyzer  | Rhythm Analyzer | テンポ、1拍ごとの発音、各パートの走り・もたりを表示 | [詳細](plugins/analyzer.md#rhythm-analyzer) |
 | Analyzer  | Spectrogram         | 時間経過に伴う周波数スペクトルの変化を表示                                         | [詳細](plugins/analyzer.md#spectrogram)               |
 | Analyzer  | Spectrum Analyzer   | 低域・中域・高域の強さをリアルタイムに表示                                                  | [詳細](plugins/analyzer.md#spectrum-analyzer)         |
 | Analyzer  | Stereo Meter        | ステレオバランスとチャンネル相関を可視化                                              | [詳細](plugins/analyzer.md#stereo-meter)              |
@@ -384,6 +388,7 @@ Effect Pipelineヘッダーの **パイプラインプリセット** ボタン�
 | EQ        | Narrow Range | ハイパスフィルターとローパスフィルターの組み合わせ | [詳細](plugins/eq.md#narrow-range) |
 | EQ        | Room EQ      | 保存した室内測定に基づくFIR補正 | [詳細](plugins/eq.md#room-eq) |
 | EQ        | Tilt EQ      | クイックトーンシェイピング用のチルトイコライザー      | [詳細](plugins/eq.md#tilt-eq)      |
+| EQ        | Tonal Balance EQ | 長期的な音色バランスを音楽スタイルごとの目標へ自動補正 | [詳細](plugins/eq.md#tonal-balance-eq) |
 | EQ        | Tone Control | 3バンドトーンコントロール | [詳細](plugins/eq.md#tone-control) |
 | Lo-Fi     | AM Radio Simulator | 音楽をモデル化したAM放送・受信機チェーンで変換 | [詳細](plugins/lofi.md#am-radio-simulator) |
 | Lo-Fi     | Bit Crusher | ビット深度削減とゼロオーダーホールド効果 | [詳細](plugins/lofi.md#bit-crusher) |

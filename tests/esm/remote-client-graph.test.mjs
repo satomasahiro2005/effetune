@@ -71,7 +71,7 @@ test('every file the page loads is in the precache list the desktop host serves'
     const listed = new Set(JSON.parse(source.slice(source.indexOf('[', source.indexOf('EFFECTUNE_PRECACHE_URLS')),
         source.lastIndexOf(']') + 1)).map(url => url.replace(/^\.\//, '')));
     assert.ok(listed.has('remote.html'));
-    assert.ok(listed.has('effetune-remote.css'));
+    assert.ok(listed.has('css/effetune-remote.css'));
     const html = fs.readFileSync(path.join(root, 'remote.html'), 'utf8');
     for (const match of html.matchAll(/(?:href|src)="([^":]+)"/g)) {
         assert.ok(listed.has(match[1]), `${match[1]} is not precached`);

@@ -81,7 +81,7 @@ const CLIENT_INFO_MAX = 48;
 // Client-supplied text shown in the Remote Control window: strip control characters, cap length.
 function cleanClientText(value) {
   if (typeof value !== 'string') return null;
-  // eslint-disable-next-line no-control-regex
+  // eslint-disable-next-line no-control-regex -- stripping control characters is the intent
   return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, CLIENT_INFO_MAX) || null;
 }
 

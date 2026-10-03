@@ -14,9 +14,9 @@ const uiTest = process.env.EFFETUNE_RUN_PIPELINE_ANALYZER_UI_TEST === '1'
 
 uiTest('places one accessible Analyzer button directly after Share with dedicated spacing', () => {
   const html = fs.readFileSync(new URL('../../effetune.html', import.meta.url), 'utf8');
-  const analyzerCss = fs.readFileSync(new URL('../../pipeline-analyzer.css', import.meta.url), 'utf8');
-  const sharedCss = fs.readFileSync(new URL('../../effetune.css', import.meta.url), 'utf8');
-  const mobileCss = fs.readFileSync(new URL('../../effetune-mobile.css', import.meta.url), 'utf8');
+  const analyzerCss = fs.readFileSync(new URL('../../css/pipeline-analyzer.css', import.meta.url), 'utf8');
+  const sharedCss = fs.readFileSync(new URL('../../css/effetune.css', import.meta.url), 'utf8');
+  const mobileCss = fs.readFileSync(new URL('../../css/effetune-mobile.css', import.meta.url), 'utf8');
   const uiSource = fs.readFileSync(new URL('../../js/pipeline-analyzer/ui.js', import.meta.url), 'utf8');
   const uiManagerSource = fs.readFileSync(new URL('../../js/ui-manager.js', import.meta.url), 'utf8');
 
@@ -25,7 +25,7 @@ uiTest('places one accessible Analyzer button directly after Share with dedicate
   assert.match(html, /id="pipelinePresetButton"[\s\S]*?id="undoButton"[\s\S]*?id="redoButton"[\s\S]*?id="cutButton"[\s\S]*?id="copyButton"[\s\S]*?id="pasteButton"[\s\S]*?id="shareButton"[\s\S]*?id="pipelineAnalyzerButton"[\s\S]*?id="decreaseColumnsButton"[\s\S]*?id="increaseColumnsButton"/);
   assert.equal(html.match(/class="pipeline-toolbar-group"/g)?.length, 6);
   assert.match(html, /id="pipelineAnalyzerButton"[^>]*aria-controls="pipelineAnalyzerPanel"[^>]*aria-expanded="false"[^>]*aria-pressed="false"/);
-  // The analyzer stylesheet loads lazily, so always-visible toolbar chrome is styled in effetune.css.
+  // The analyzer stylesheet loads lazily, so always-visible toolbar chrome is styled in css/effetune.css.
   assert.match(sharedCss, /\.pipeline-analyzer-button\s*\{[^}]*margin-left:\s*5px;/s);
   assert.match(sharedCss, /\.pipeline-preset-button,\s*\.share-button,\s*\.pipeline-analyzer-button\s*\{[^}]*height:\s*24px;[^}]*padding:\s*4px 8px;/s);
   assert.doesNotMatch(analyzerCss, /\.pipeline-preset-button/);
@@ -73,7 +73,7 @@ uiTest('places one accessible Analyzer button directly after Share with dedicate
   assert.match(sharedCss, /\.pipeline-analyzer-panel select option:checked,/);
   assert.match(sharedCss, /\.pipeline-analyzer-panel input\[type="number"\],\s*\.pipeline-analyzer-panel select,/);
   assert.match(sharedCss, /\.plugin-parameter-ui \.parameter-row input\[type="number"\],\s*\.pipeline-analyzer-panel input\[type='number'\]\s*\{[^}]*padding:\s*4px;[^}]*background-color:\s*var\(--et-surface-17\);[^}]*border:\s*1px solid var\(--et-surface-23\);[^}]*color:\s*var\(--et-text-primary\);[^}]*border-radius:\s*4px;/s);
-  assert.match(sharedCss, /\.plugin-parameter-ui select,\s*\.pipeline-analyzer-panel select\s*\{[^}]*background-color:\s*var\(--et-surface-17\);[^}]*border:\s*1px solid var\(--et-surface-23\);[^}]*color:\s*var\(--et-text-primary\);[^}]*border-radius:\s*4px;[^}]*padding:\s*4px;/s);
+  assert.match(sharedCss, /\.plugin-parameter-ui select,\s*\.pipeline-analyzer-panel select[^{}]*\{[^}]*background-color:\s*var\(--et-surface-17\);[^}]*border:\s*1px solid var\(--et-surface-23\);[^}]*color:\s*var\(--et-text-primary\);[^}]*border-radius:\s*4px;[^}]*padding:\s*4px;/s);
   assert.match(sharedCss, /body:not\(\.layout-mobile\) \.plugin-parameter-ui \.parameter-row input\[type="number"\],\s*body:not\(\.layout-mobile\) \.pipeline-analyzer-panel input\[type="number"\]\s*\{[^}]*padding:\s*4px;[^}]*font:\s*inherit;[^}]*line-height:\s*normal;/s);
   assert.match(sharedCss, /body:not\(\.layout-mobile\) :is\([^{}]*\.pipeline-analyzer-panel input\[type="number"\],[^{}]*\) \{[^}]*box-sizing: border-box;[^}]*height: 26px;[^}]*min-height: 26px;/s);
   assert.doesNotMatch(analyzerCss, /\.pipeline-analyzer-panel input\[type='number'\]\s*\{[^}]*(?:height:\s*30px|padding:\s*3px 7px)/s);

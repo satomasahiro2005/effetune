@@ -33,6 +33,7 @@ On the draggable point graphs in 5Band PEQ, 15Band PEQ, 5Band FIR PEQ, Group Del
 - [Narrow Range](#narrow-range) - Focus on specific parts of the sound
 - [Room EQ](#room-eq) - FIR correction from saved room measurements
 - [Tilt EQ](#tilt-eq) - Simple EQ that tilts the sound spectrum
+- [Tonal Balance EQ](#tonal-balance-eq) - Automatically corrects the long-term tonal balance toward a music-style target
 - [Tone Control](#tone-control) - Simple bass, mid, and treble adjustment
 
 ## 15Band GEQ
@@ -84,6 +85,7 @@ A detailed sound adjustment tool with 15 separate controls, each affecting a spe
 - Easy-to-use sliders with precise control
 - One-click reset to default settings
 - Double-click a slider to return that band to 0dB
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## 15Band PEQ
 
@@ -140,6 +142,7 @@ A 15-band parametric equalizer for fine-tuning bass, vocals, presence, and trebl
 - Real-time curve updates as you adjust settings
 - Frequency and gain grid
 - Accurate numerical readouts for all parameters
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## 5Band Dynamic EQ
 
@@ -189,6 +192,7 @@ A smart equalizer that automatically adjusts frequency bands based on the conten
 - Real-time frequency response graph
 - Dynamic response curve showing the current boosts and cuts
 - Interactive frequency and gain controls
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## 5Band FIR PEQ
 
@@ -224,6 +228,7 @@ A smart equalizer that automatically adjusts frequency bands based on the conten
 - Numbered markers correspond to the five bands. Drag horizontally to change frequency and vertically to change gain; disabled bands appear dimmed.
 - The status line reports whether the FIR is being designed, prepared, or used, and shows total processing latency in samples and milliseconds.
 - If the selected Taps cannot reproduce an extreme response accurately, the status recommends increasing Taps or reducing Q or Slope.
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## 5Band PEQ
 
@@ -270,6 +275,7 @@ A flexible 5-band equalizer for shaping music playback. Use it when bass feels b
 - Real-time curve updates as you adjust settings
 - Frequency and gain grid
 - Accurate numerical readouts for all parameters
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## Band Pass Filter
 
@@ -316,6 +322,7 @@ A precision band-pass filter that combines high-pass and low-pass filters to all
 - Clear visualization of both filter slopes and cutoff points
 - Interactive controls for precise adjustment
 - Frequency grid with markers at key reference points
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## Comb Filter
 
@@ -364,6 +371,7 @@ A comb filter that adds a phasey, hollow, metallic, or resonant character by mix
 - Fundamental frequency marker showing delay time
 - Interactive controls for precise adjustment
 - Delay distance calculation in millimeters
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## Earphone Cable Sim
 
@@ -414,6 +422,7 @@ Click **Effect Presets** in the effect header to compare complete source-and-cab
 - Grid labels cover 20Hz to 20kHz; the plotted curve extends across the full 10Hz to 40kHz graph range
 - Green response curve over a dark grid, with an auto-scaled dB axis around the normalized 0dB reference
 - Larger curve deviations indicate where the model changes playback level most
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## Group Delay EQ
 
@@ -444,6 +453,7 @@ Total latency is the Latency setting plus half the Taps count. It stays the same
 - The grey curve is the target: the delay you asked for, interpolated across a logarithmic frequency axis from 20 Hz to 20 kHz. The delay axis rescales itself to fit the current settings, starting at ±5 ms.
 - The green curve is what the designed filter really does. Where the two curves lie on top of each other the setting is fully realized; where they separate, the filter cannot follow the request with the current Taps.
 - The status line shows the total latency in samples and milliseconds, and the magnitude ripple of the filter. Ripple measures how far the realized magnitude response departs from the flat design target: smaller values are closer to the target, and 0.3 dB is the accuracy-warning threshold.
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## Group Delay PEQ
 
@@ -467,7 +477,7 @@ Only the differences between frequencies matter for the sound. A filter that del
   - **Low Shelf** - A smooth step that holds Delay below Freq, passes half of Delay at Freq, and falls to zero above it. Q sets the steepness of the transition: Q 1 matches the group-delay transition of a first-order allpass, while Q 2 to 4 gives the practical, roughly one-octave step used for band-limited alignment.
   - **High Shelf** - The mirror image of Low Shelf, and its complement: the two shapes at the same Freq and Q add up to a constant Delay.
   - **Filter GD** - Adds or subtracts the group-delay shape of one analog filter stage (high-pass, crossover, or resonance) as it is. Enter the cutoff frequency and Q of the filter you are correcting into Freq and Q, and the height of the hump on the measured group-delay curve into Delay, using a negative value to cancel it.
-- **Freq** - Sets the band frequency from 20 Hz to 20 kHz.
+- **Freq** - Sets the band frequency from 20 Hz to 20 kHz. Near 18 to 20 kHz the target is tapered smoothly down to zero, so a band placed close to the top of the range has a reduced effect.
 - **Delay** - Sets the extreme value of that band's own curve in milliseconds. Positive values make that region arrive later, negative values earlier. The range covers the whole delay the filter can hold: at 96 kHz that is ±18.6 ms with 4096 taps and ±149.3 ms with 32768 taps. Changing Taps or the sample rate clamps the stored values to the new limit.
 - **Q** - Sets the width or steepness of the shape from 0.1 to 100 on a logarithmic slider, and is used by every Type. The useful ranges differ: 0.25 to 16 for Low Shelf and High Shelf, and 0.1 to 10 for Filter GD. In practice, shelves are used at Q 2 to 4, and Filter GD at Q 0.5 to 8 - 0.5 corresponds to a first-order allpass or an LR2 sum, 0.7071 to a Butterworth alignment or an LR4 sum, and 8 to a sharp resonance. Settings outside those ranges are still accepted; the status line reports when the current Taps cannot realize them.
 - **Enabled** - Turns each of the five bands on or off. Disabled bands contribute nothing to the target curve and appear dimmed on the graph.
@@ -480,9 +490,9 @@ Total latency is the Latency setting plus half the Taps count. It stays the same
 
 - The grey curve is the target: the sum of the enabled band shapes, drawn on a logarithmic frequency axis. The delay axis rescales itself to fit the current settings, starting at ±5 ms.
 - The green curve is what the designed filter really does. Where the two curves lie on top of each other the setting is fully realized; where they separate, the filter cannot follow the request with the current Taps.
-- Near 18 to 20 kHz the target is tapered smoothly down to zero. This high-frequency taper is by design, so a band placed close to the top of the range is shown, and realized, with a reduced effect.
 - Numbered markers correspond to the five bands. Drag horizontally to change Freq and vertically to change Delay. The marker sits on the curve only for Peak: a shelf passes half of Delay at Freq, and Filter GD reaches its extreme value below Freq - just below it at high Q, and progressively further below as Q falls, until at Q of about 0.577 or less the extreme value sits at the low-frequency end of the graph.
 - The status line shows the total latency in samples and milliseconds, and the magnitude ripple of the filter. Ripple measures how far the realized magnitude response departs from the flat design target: smaller values are closer to the target, and 0.3 dB is the accuracy-warning threshold.
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## Hi Pass Filter
 
@@ -520,6 +530,7 @@ A precision high-pass filter that removes unwanted low frequencies while preserv
 - Clear visualization of the filter slope and cutoff point
 - Interactive controls for precise adjustment
 - Frequency grid with markers at key reference points
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## Lo Pass Filter
 
@@ -561,6 +572,7 @@ A precision low-pass filter that removes unwanted high frequencies while preserv
 - Clear visualization of the filter slope and cutoff point
 - Interactive controls for precise adjustment
 - Frequency grid with markers at key reference points
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## Loudness Equalizer
 
@@ -614,6 +626,7 @@ Click **Effect Presets** in the effect header to start from a complete loudness-
 - Interactive parameter controls
 - Volume-dependent correction curve; the uniform Relative Volume gain is not included in the graph
 - Precise numerical readouts
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## Narrow Range
 
@@ -653,6 +666,7 @@ A tool that lets you focus on specific parts of the music by filtering out unwan
 - Clear graph showing frequency response
 - Easy-to-adjust frequency controls
 - Simple slope drop-down menus
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## Room EQ
 
@@ -705,11 +719,11 @@ Measurements are device-local references. A URL or preset stores the selected me
 
 - Use the **Graph** radio buttons above the graph to switch between **Frequency**, **Phase**, **Min Group Delay**, **Excess Group Delay**, and **Impulse**.
 - **Phase** uses a logarithmic frequency axis and a vertical phase axis from -180° to 180°. The gray line is the phase before correction and the green line is the calculated phase after the actual FIR. The measured onset is removed from both, and the FIR's known fixed delay is also removed from the corrected result, so the graph shows the phase change introduced by the filter without those fixed timing offsets. A measurement without impulse-response data shows an unavailable message instead.
-- **Min Group Delay** shows the delay implied by the minimum-phase part of the magnitude response. **Excess Group Delay** separately shows the remaining delay after that minimum-phase part is removed, making reflections and other non-minimum-phase timing easier to inspect. Both views use a logarithmic frequency axis and a vertical axis in milliseconds. Values retain the absolute group delay after removing the measured onset and, from the corrected result, the FIR's known fixed delay. They are not re-referenced at 1 kHz, so the value there is not necessarily 0 ms. The gray line is before correction and the green line is the calculated result after the actual FIR. Group-delay analysis is independent of the displayed point spacing and does not rely on phase unwrapping. Smoothing is applied on a fixed logarithmic-frequency analysis grid, so a lower Smoothing setting shows finer detail. **Min Group Delay** automatically adjusts its vertical range to the displayed curves. **Excess Group Delay** keeps a fixed -100 to +100 ms range, while the hover readout retains the unclipped value when a curve extends beyond it. A measurement without impulse-response data shows an unavailable message instead.
+- **Min Group Delay** shows the delay implied by the minimum-phase part of the magnitude response. **Excess Group Delay** separately shows the remaining delay after that minimum-phase part is removed, making reflections and other non-minimum-phase timing easier to inspect. Both views use a logarithmic frequency axis and a vertical axis in milliseconds. Values retain the absolute group delay after removing the measured onset and, from the corrected result, the FIR's known fixed delay. They are not re-referenced at 1 kHz, so the value there is not necessarily 0 ms. The gray line is before correction and the green line is the calculated result after the actual FIR. Group-delay analysis is independent of the displayed point spacing and does not rely on phase unwrapping. Smoothing is applied on a fixed logarithmic-frequency analysis grid, so a lower Smoothing setting shows finer detail. **Min Group Delay** automatically adjusts its vertical range to the displayed curves. **Excess Group Delay** keeps a fixed -100 to +100 ms range, while the readout retains the unclipped value when a curve extends beyond it. A measurement without impulse-response data shows an unavailable message instead.
 - **Impulse** shows the selected point, or the time-aligned average waveform when Reference Point is Consensus, from 2 ms before the measured onset through the largest of 5 ms, Direct Window, and — when Reverb Correction is above 0% — Reverb Window limited to 50 ms. The gray line is before correction and the green line is the calculated result after the actual FIR. The measured onset is the shared 0 ms reference, and only the FIR's known fixed delay is removed from the corrected waveform, so relative peak timing and pre-ringing remain visible. Both lines use the same normalized amplitude scale. Low-frequency Phase Extension and Reverb Correction can analyze later response than this view displays. For this display only, components at and above 20 kHz are removed; this does not affect the correction filter or audio processing. A measurement without impulse-response data shows an unavailable message instead.
 - **Frequency** uses a logarithmic frequency axis and a vertical gain axis in dB.
 - The **Preview channel** selector above the graph appears only when filters have been designed for more than one channel; it selects which channel's response the graph and the Additional EQ base curve show, and does not affect the audio.
-- Moving the pointer over the graph marks every curve with a dot at the pointer's horizontal position and shows each reading to the right of its name in the legend, with the pointer's own frequency — or time in the Impulse view — above them. The readout clears when the pointer leaves the graph.
+- Hover over the graph, or touch and drag on it, to mark each curve with a dot at that point and show its value beside its name in the legend, with the frequency — or time in the Impulse view — above them.
 - The two white dotted vertical lines mark the frequencies set by Correction Low and Correction High.
 - Numbered markers correspond to the five bands. Drag a marker horizontally to change frequency and vertically to change gain; disabled bands appear dimmed.
 - The light gray curve shows the smoothed measured frequency response with the graph's common display offset applied.
@@ -717,6 +731,81 @@ Measurements are device-local references. A URL or preset stores the selected me
 - The bright green curve shows that correction with Additional EQ applied. This is the combined magnitude response folded into the FIR.
 - The white curve shows the estimated corrected response obtained by adding the bright green combined correction to the light gray measured response. The gray and white curves share an offset that maps the automatic correction's 100% destination level to 0 dB; Max Boost limits can leave residual deviations, while Additional EQ intentionally reshapes the response around that reference. It is a calculated preview, not a new acoustic measurement.
 - The status below the controls shows total processing latency, FIR resolution, and whether the filter asset is bypassed, staged, preparing, active, or in error.
+
+## Tonal Balance EQ
+
+Measures the long-term tonal balance of whatever is playing and gradually corrects it toward the typical balance of released music in a chosen style. Use it when recordings, playlists, or streams sound consistently too dark, too bright, too boomy, or too thin, and you want them evened out without adjusting an EQ by hand for each one. It corrects the recording, not your speakers or room; use Room EQ for those.
+
+The plugin compares the measured spectrum with the target after lining up their overall levels, so only the shape of the balance matters, not how loud the recording is. It reduces the regions that are too strong and then raises the whole signal by one make-up gain, so the loudness stays the same and the weaker regions come forward. It does not raise regions that hold no real music content, such as the empty top of a band-limited recording or steady hiss; a steady, noise-like sound such as an unchanging synth pad is treated the same way, and so is a sound that keeps playing at the same level through the quiet breaks, because it cannot be told apart from background noise. Silence and quiet breaks do not count toward the measurement. All channels receive the same correction, so the stereo image is unchanged, and the plugin adds no delay.
+
+The style targets are learned from the long-term spectra of a permissively licensed music collection. Each style has a typical curve and a typical spread between tracks. **Tilt** is a fixed reference instead: flat in the bass, then falling at a set slope. Any target can be reshaped to your taste with the five Target Adjust bands.
+
+### Sound Enhancement Guide
+- **Mixed playlists and streaming**: Start with the defaults (Target **All**, Amount 100%, Averaging Time 30 s). The correction fades in over tens of seconds as the measurement becomes reliable, so compare with the plugin turned off after about half a minute of music.
+- **One steady correction for an album**: Press **Reset** when the album starts and set Averaging Time to **∞**. The plugin then averages everything it has heard since the Reset, so the correction settles and changes less and less.
+- **Music of one style**: Choose the Target closest to what you are playing, such as **Classical** for orchestral recordings or **Electronic** for dance music. All is a good choice when styles are mixed.
+- **A gentler result**: Lower Amount to about 50% or Range to about 3 dB. For only broad tilts without narrower shaping, raise Smoothing to about 1 oct.
+- **Following changes within a song**: Shorten Averaging Time to about 0.5 to 1 s so a dark verse and a bright chorus are each corrected. If you hear the tone moving, lengthen it again.
+- **Leaving the extremes alone**: Raise Low so the deep bass is not reshaped, or lower High so the top octave is not reshaped.
+- **Your own house curve**: Shape the target with Target Adjust. For example, a High shelf of +1.5 dB at 8 kHz with Q 0.7 asks for a slightly brighter balance, and a broad Peak of -2 dB around 300 Hz with Q 0.7 asks for less low-mid weight. Each recording is then corrected toward that shape only as far as it needs, instead of every recording receiving the same EQ.
+- **A mechanical reference**: Choose Target **Tilt**. The default Slope of -6 dB/oct asks for a balance slightly darker than most released music; set Slope to about -4.5 to -5 dB/oct for a more typical balance, or to -3 dB/oct, the pink-noise reference, for a brighter one.
+
+The make-up gain keeps the loudness, not the peak level, so peaks can rise. If a later stage clips, lower the level after this plugin or add a limiter.
+
+### Parameters
+- **Target** - The tonal balance that is the goal: **All**, **Classical**, **Electronic**, **Pop**, **Rock**, or **Tilt** (default All)
+  - All is an equal-weight mixture of the four styles
+  - Tilt is a fixed reference, not a learned style: flat below Corner, then falling at Slope
+- **Slope** - Shown only while Target is Tilt. How steeply the target falls above Corner (-18 dB/oct to 0 dB/oct, default -6 dB/oct)
+  - -3 dB/oct is pink noise, which has equal energy in every octave; 0 dB/oct is white noise and -6 dB/oct is brown noise
+  - Typical commercial recordings average roughly -5 dB/oct (Pestana et al.), so the default asks for a slightly darker balance than typical music. A shallower Slope asks for more treble; steeper (more negative) settings tilt the balance further toward the bass
+- **Corner** - Shown only while Target is Tilt. The frequency below which the target stays flat (20 Hz to 1000 Hz, default 250 Hz)
+  - Lower values continue the slope further into the deep bass, asking for more deep bass
+  - Higher values keep more of the bass flat, asking for less bass
+- **Amount** - How much of the correction is applied (0% to 100%, default 100%)
+  - Lower values scale the whole correction down; at 0% the sound is unchanged
+  - At 0% the measurement and the graph keep running, and Range, Smoothing, Low, and High are disabled
+- **Range** - The largest correction any band can receive, up or down (0 dB to 12 dB, default 6 dB)
+  - Lower values keep changes subtle; 0 dB turns the correction off
+  - Higher values let recordings that are far from the target move closer to it
+- **Smoothing** - How wide the features of the correction curve are (0.1667 oct to 2 oct, default 0.5 oct)
+  - Higher values give broad, gentle tilts
+  - Lower values follow the target more closely, including narrower peaks and dips
+- **Averaging Time** - How long the measurement averages (0.1 s to ∞, default 30 s)
+  - Short values make the tone follow changes within a song
+  - Long values give a steady correction that changes slowly between songs
+  - The right end of the slider is **∞**: the plugin averages everything since the last Reset. You can also type ∞ in the value box
+- **Low** - The lower edge of the corrected range (20 Hz to 200 Hz, default 20 Hz)
+  - Below it, the correction stays at the value it has at Low
+  - Raise it so the deep bass is not reshaped
+- **High** - The upper edge of the corrected range (2000 Hz to 20000 Hz, default 16000 Hz)
+  - Above it, the correction stays at the value it has at High
+  - Lower it so the top octave is not reshaped
+- **Average SPL** - Your estimated average listening level at the listening position, as in Loudness Equalizer (60 dB to 96 dB, default 83 dB)
+  - It only decides which quiet bands are loud enough to hear and may therefore be raised; it does not change the output level
+  - Lower values treat more faint bands as inaudible, so they are not raised
+  - Higher values count more faint bands as audible content
+- **Target Adjust** - Five bands below the graph that reshape the target, with the same controls as Room EQ's Additional EQ and 5Band PEQ
+  - Each band can be turned on or off and set to Peak, Low shelf, or High shelf
+  - Frequency: 20 Hz to 20 kHz (defaults 100 Hz, 316 Hz, 1 kHz, 3.16 kHz, and 10 kHz)
+  - Gain: -20 dB to +20 dB (default 0 dB). Positive values ask for more of that region, negative values for less; 0 dB leaves the target unchanged
+  - Q: 0.1 to 10, limited to 2 for shelves (default 0.7). Higher values affect a narrower range
+
+Target Adjust changes only the target. The plugin still measures each recording and corrects it toward the adjusted target with the same Amount, Range, Smoothing, Low, and High; it is not an extra EQ applied on top. Lifting the whole target by the same amount therefore changes nothing, because overall levels are lined up before the comparison and the loudness stays matched. Regions with no real music content are still not raised, and below Low and above High the correction is held as usual. The target is followed in hearing-sized bands and then smoothed, so a narrow peak or notch is spread out and comes out smaller, as the graph shows; use 5Band PEQ for narrow fixes. Range still limits the correction in every band, so a large adjustment may need a larger Range.
+
+### Visual Display
+- The horizontal axis is frequency from about 26 Hz to 18.6 kHz, and the vertical axis is level in dB. The vertical range grows to fit the target band, the EQ response, the measured level in the corrected range, and the Target Adjust handles and curve, and returns to ±12 dB on Reset or a Target change. Measured points far from the target can run past the edge of the graph.
+- **Target** is the line of the target balance, including Target Adjust, drawn so that its average is 0 dB. For a style, the shaded band around it shows the typical spread between tracks of that style; Tilt, a fixed reference, has none. Levels are shown per hertz (spectral density), so a Tilt target is drawn flat below Corner and then as a straight line falling at Slope; pink noise is a -3 dB/oct line.
+- **Measured** is the line with dots: the measured long-term spectrum, shifted to line up with the target. Where it lies below the target band, the recording is weaker than typical there; where it lies above, it is stronger. Measurement pauses while you preview a frequency and resumes when the preview ends.
+- **EQ response** is the bold line: the gain the plugin applies, including the make-up gain. 0 dB means unchanged.
+- **Withheld lift** is the filled area rising from the EQ response line. Its height, shown in the readout as an approximate value in dB, is about how much more lift the band would have received if it had not been held back for being poorly recognized as music content (see above). It is an approximate size, not an exact gain, and it follows Amount and Range.
+- **Target adjust** is the thin curve around 0 dB: the combined response of the Target Adjust bands exactly as you set them. The numbered handles show each band at its frequency and gain, where 0 dB means no change; they do not sit on the Target line. Drag a handle horizontally to change frequency and vertically to change gain, turn the mouse wheel over it to change Q, and right-click it to turn the band on or off. Disabled bands appear dimmed.
+- While audio plays, the Target line follows the handles within a moment; where it is smoother than the Target adjust curve, that part of the request is being averaged out. While stopped, the Target line keeps its last measured shape and the Target adjust curve shows what you have asked for. Slope and Corner changes made while stopped show on the Target line once playback resumes.
+- The regions below Low and above High are dimmed.
+- Hover over the graph, or touch and drag on it, to read the values at that point. Besides the curves, the readout shows **Presence**, the share of the measured time in which that band was recognized as audible music content, the current **Make-up gain**, and the **Loudness** of everything measured since the last Reset in LKFS.
+- Before any audio has been measured, the graph shows "Play audio to start measuring". The Target Adjust handles and the Target adjust curve are still shown and can be edited.
+- **Reset** clears the measurement and starts again from the current audio; Target Adjust is not changed. The measurement also starts over when processing resumes after a power-saving pause in silence.
+- **Copy as PEQ** copies the EQ response on the graph as 5Band PEQ settings. Press Ctrl+V in the Effect Pipeline to add a 5Band PEQ with that curve before the selected effect, or at the end if none is selected. Turn Tonal Balance EQ off, or remove it, to keep the current correction fixed. The 5Band PEQ follows the shape of the curve between Low and High but not its overall level, so the loudness can differ slightly. The button is available once the graph shows an EQ response and Amount is above 0%.
 
 ## Tone Control
 
@@ -757,6 +846,7 @@ A simple three-band sound adjuster for quick and easy sound personalization. Per
 ### Visual Display
 - Easy-to-read graph showing your adjustments
 - Simple sliders for each control
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ## Tilt EQ
 
@@ -788,3 +878,4 @@ A simple yet effective equalizer that gently tilts the frequency balance of your
 - Clear indication of current slope value
 
 - Quick reset button
+- Hover over the graph, or touch and drag on it, to read the values at that point.

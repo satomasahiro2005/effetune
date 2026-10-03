@@ -9,7 +9,8 @@ export async function runControllerMappingSettingsBrowserSmoke({ browser, baseUR
       const settingsPage = await settingsContext.newPage();
       await settingsPage.goto(`${baseURL}${FIXTURE_PATH}`, { waitUntil: 'load' });
       await settingsPage.evaluate(value => window.__controllerMappingDialogSmoke.prepareSettings(value), isElectron);
-      assert.equal(await settingsPage.locator('link[href$="effetune-library.css"]').count(), 0);
+      assert.equal(await settingsPage.locator('link[href$="css/effetune-library.css"]').count(), 0);
+      await settingsPage.locator('#config-category-controllers').click();
       await settingsPage.locator('#controller-mapping-btn').click();
       await settingsPage.waitForFunction(() => {
         const dialog = document.querySelector('.midi-mapping-dialog');
@@ -23,7 +24,7 @@ export async function runControllerMappingSettingsBrowserSmoke({ browser, baseUR
       assert.equal(await settingsPage.locator('.config-dialog').count(), 1);
       await settingsPage.locator('#controller-mapping-btn').click();
       await settingsPage.locator('.midi-mapping-dialog').waitFor({ state: 'visible' });
-      assert.equal(await settingsPage.locator('link[href$="effetune-library.css"]').count(), 1);
+      assert.equal(await settingsPage.locator('link[href$="css/effetune-library.css"]').count(), 1);
     } finally {
       await settingsContext.close();
     }

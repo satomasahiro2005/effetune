@@ -18,6 +18,16 @@ const backupRuntimeDependencies = [
   'features/measurement/audio-utils/channel-selection.js',
   'features/measurement/audio-utils/output-routing.js'
 ];
+// Loaded on demand by Tonal Balance EQ's Copy as PEQ.
+const peqCopyRuntimeDependencies = [
+  'features/measurement/peq-calculator/design-utils.js',
+  'features/measurement/peq-calculator/filter-response.js',
+  'features/measurement/peq-calculator/optimization.js',
+  'features/measurement/peq-calculator/peak-detection.js',
+  'features/measurement/peq-calculator/peq-calculator.js',
+  'features/measurement/peq-calculator/smoothing.js',
+  'features/measurement/ui/peq-clipboard.js'
+];
 
 function createResponse(name, ok = true) {
   return {
@@ -126,14 +136,14 @@ function createPrecacheFixture(t) {
 
   for (const relativePath of [
     'effetune.html',
-    'effetune.css',
-    'effetune-theme.css',
-    'effetune-mobile.css',
-    'effetune-library.css',
-    'effetune-remote.css',
+    'css/effetune.css',
+    'css/effetune-theme.css',
+    'css/effetune-mobile.css',
+    'css/effetune-library.css',
+    'css/effetune-remote.css',
     'remote.html',
-    'pipeline-analyzer.css',
-    'user-data-backup.css',
+    'css/pipeline-analyzer.css',
+    'css/user-data-backup.css',
     'manifest.json',
     'sw.js'
   ]) {
@@ -143,7 +153,9 @@ function createPrecacheFixture(t) {
   writeFixtureFile(root, 'features/effetune-benchmark.js', 'export const benchmark = true;\n');
   writeFixtureFile(root, 'features/effetune-benchmark-score.js', 'export const score = true;\n');
   writeFixtureFile(root, 'features/benchmark-score-reference.js', 'export const reference = true;\n');
-  for (const relativePath of backupRuntimeDependencies) writeFixtureFile(root, relativePath, 'export {};\n');
+  for (const relativePath of [...backupRuntimeDependencies, ...peqCopyRuntimeDependencies]) {
+    writeFixtureFile(root, relativePath, 'export {};\n');
+  }
   writeFixtureFile(root, 'js/app.js', 'console.log("first");\n');
   writeFixtureFile(root, 'plugins/plugins.txt', 'plugins/test.js\n');
   writeFixtureFile(root, 'plugins/test.js', 'class TestPlugin {}\n');
@@ -205,7 +217,7 @@ test('committed precache source matches the current precached assets', () => {
 
   assert.equal(committedSource, buildPrecacheSource().body);
   const urls = loadPrecacheUrls();
-  for (const file of ['effetune-theme.css', 'js/theme-boot.js', 'js/theme-registry.mjs', 'plugins/theme-palette.js']) {
+  for (const file of ['css/effetune-theme.css', 'js/theme-boot.js', 'js/theme-registry.mjs', 'plugins/theme-palette.js']) {
     assert.ok(urls.has('./' + file), file);
   }
 });
@@ -231,12 +243,29 @@ test('precache includes the measurement dependency closure used by backup adapte
   }
 });
 
+test('precache includes the PEQ fitter loaded by Copy as PEQ', () => {
+  const { urls } = buildPrecacheSource();
+  for (const relativePath of peqCopyRuntimeDependencies) assert.ok(urls.includes(relativePath), relativePath);
+});
+
 test('precache includes release WebAssembly DSP artifacts and omits debug builds', t => {
   const root = createPrecacheFixture(t);
   const { urls } = buildPrecacheSource({ root });
 
   assert.ok(urls.includes('plugins/dsp/effetune-dsp.wasm'));
   assert.equal(urls.includes('plugins/dsp/effetune-dsp.debug.wasm'), false);
+});
+
+test('precache ignores temporary image work files', t => {
+  const root = createPrecacheFixture(t);
+  const baseline = buildPrecacheSource({ root });
+
+  writeFixtureFile(root, 'images/_vizaudio_tmp/gen.js', 'console.log("temporary");\n');
+  writeFixtureFile(root, 'images/_vizaudio_tmp/cover.jpg', Buffer.from([1, 2, 3]));
+  const withTemporaryFiles = buildPrecacheSource({ root });
+
+  assert.deepEqual(withTemporaryFiles.urls, baseline.urls);
+  assert.equal(withTemporaryFiles.digest, baseline.digest);
 });
 
 test('precache cache version changes when precached asset content changes', t => {

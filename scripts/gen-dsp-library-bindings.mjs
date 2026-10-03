@@ -99,11 +99,13 @@ const channelImplementation = Object.freeze({
 });
 
 export const PUBLIC_EFFECT_TYPES = Object.freeze([
+  'AnalogMeter',
   'ChromaSpiral',
   'LevelMeter',
   'NoteSpectrogram',
   'Oscilloscope',
   'PitchMeter',
+  'RhythmAnalyzer',
   'Spectrogram',
   'SpectrumAnalyzer',
   'StereoMeter',
@@ -146,6 +148,7 @@ export const PUBLIC_EFFECT_TYPES = Object.freeze([
   'NarrowRange',
   'RoomEQ',
   'TiltEQ',
+  'TonalBalanceEQ',
   'ToneControl',
   'AMRadioSimulator',
   'BitCrusher',
@@ -208,11 +211,13 @@ export const PUBLIC_EFFECT_TYPES = Object.freeze([
   'StereoBlend'
 ]);
 export const FROZEN_PARAM_DIRECTORIES = Object.freeze({
+  AnalogMeterPlugin: 'dsp/plugins/analyzer/analog_meter',
   ChromaSpiralPlugin: 'dsp/plugins/analyzer/chroma_spiral',
   LevelMeterPlugin: 'dsp/plugins/analyzer/level_meter',
   NoteSpectrogramPlugin: 'dsp/plugins/analyzer/note_spectrogram',
   OscilloscopePlugin: 'dsp/plugins/analyzer/oscilloscope',
   PitchMeterPlugin: 'dsp/plugins/analyzer/pitch_meter',
+  RhythmAnalyzerPlugin: 'dsp/plugins/analyzer/rhythm_analyzer',
   SpectrogramPlugin: 'dsp/plugins/analyzer/spectrogram',
   SpectrumAnalyzerPlugin: 'dsp/plugins/analyzer/spectrum_analyzer',
   StereoMeterPlugin: 'dsp/plugins/analyzer/stereo_meter',
@@ -255,6 +260,7 @@ export const FROZEN_PARAM_DIRECTORIES = Object.freeze({
   NarrowRangePlugin: 'dsp/plugins/eq/narrow_range',
   RoomEqPlugin: 'dsp/plugins/eq/room_eq',
   TiltEQPlugin: 'dsp/plugins/eq/tilt_eq',
+  TonalBalanceEQPlugin: 'dsp/plugins/eq/tonal_balance_eq',
   ToneControlPlugin: 'dsp/plugins/eq/tone_control',
   AMRadioSimulatorPlugin: 'dsp/plugins/lofi/am_radio_simulator',
   BitCrusherPlugin: 'dsp/plugins/lofi/bit_crusher',

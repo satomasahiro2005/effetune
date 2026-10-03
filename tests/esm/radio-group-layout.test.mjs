@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-const appCss = fs.readFileSync(new URL('../../effetune.css', import.meta.url), 'utf8');
+const appCss = fs.readFileSync(new URL('../../css/effetune.css', import.meta.url), 'utf8');
 const combFilterCss = fs.readFileSync(new URL('../../plugins/eq/comb_filter.css', import.meta.url), 'utf8');
 
 test('radio choices wrap as intact, uniformly spaced control-height units', () => {
@@ -26,6 +26,12 @@ test('radio choices wrap as intact, uniformly spaced control-height units', () =
     appCss,
     /\.plugin-parameter-ui\s+\.parameter-row:has\(>\s*\.radio-group\)\s*\{[^}]*row-gap:\s*4px;/s
   );
+  // Options after a leading caption wrap in their own box, aligned under the first option.
+  assert.match(
+    appCss,
+    /\.radio-options\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1\s+1\s+0;[^}]*flex-wrap:\s*wrap;/s
+  );
+  assert.match(appCss, /\.radio-options\s*>\s*:has\(>\s*input\[type="radio"\]\),/);
   assert.match(
     combFilterCss,
     /\.comb-filter-plugin-ui\s+\.radio-group\s*\{[^}]*column-gap:\s*10px;[^}]*row-gap:\s*4px;/s

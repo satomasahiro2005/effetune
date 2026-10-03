@@ -160,6 +160,7 @@ test('RecentlyPlayedTracker records playback transitions once and remains best e
 });
 
 test('Electron and Web expose every system-playlist transport hop', () => {
+  const core = fs.readFileSync(new URL('../../js/library/repository/catalog-runtime-core.js', import.meta.url), 'utf8');
   const operations = [
     'recordRecentlyPlayed',
     'setTrackFavorite',
@@ -176,7 +177,11 @@ test('Electron and Web expose every system-playlist transport hop', () => {
     '../../js/library/repository/web-catalog-worker.js',
     '../../js/library/repository/web-sqlite-runtime.js',
     '../../js/library/library-manager-v2.js'
-  ].map(relativePath => fs.readFileSync(new URL(relativePath, import.meta.url), 'utf8'));
+  ].map(relativePath => {
+    const source = fs.readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+    return /(?:library-catalog-worker\.cjs|web-sqlite-runtime\.js)$/.test(relativePath)
+      ? source + '\n' + core : source;
+  });
 
   for (const operation of operations) {
     for (const source of sources) assert.match(source, new RegExp(`\\b${operation}\\b`));

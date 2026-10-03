@@ -13,21 +13,15 @@ const defaultHost = process.env.HOST || '127.0.0.1';
 const defaultPort = Number.parseInt(process.env.PORT || '8000', 10);
 // Keep this public boundary aligned with the app shell entries in sw-precache.js.
 const webAppRootFiles = new Set([
-  'effetune-library.css',
-  'effetune-mobile.css',
-  'effetune-theme.css',
-  'effetune.css',
-  'effetune-remote.css',
   'effetune.html',
   'manifest.json',
   'package.json',
-  'pipeline-analyzer.css',
   'remote.html',
   'sw-precache.js',
-  'sw.js',
-  'user-data-backup.css'
+  'sw.js'
 ]);
 const webAppAssetDirectories = new Set([
+  'css',
   'features',
   'images',
   'js',

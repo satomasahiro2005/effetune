@@ -61,6 +61,15 @@ class FakeElement {
     visit(this);
     return result;
   }
+  querySelector(selector) {
+    const className = /^\.([\w-]+)$/.exec(selector)?.[1];
+    for (const child of this.children) {
+      if (child?.className?.split?.(/\s+/).includes(className)) return child;
+      const match = child?.querySelector?.(selector);
+      if (match) return match;
+    }
+    return null;
+  }
   setPointerCapture(pointerId) { this.capturedPointer = pointerId; }
   releasePointerCapture(pointerId) {
     if (this.capturedPointer === pointerId) this.capturedPointer = null;
@@ -168,6 +177,8 @@ async function loadPlugin() {
       const labelElement = new FakeElement('label');
       labelElement.textContent = `${label}:`;
       row.appendChild(labelElement);
+      const optionsElement = row.appendChild(new FakeElement('span'));
+      optionsElement.className = 'radio-options';
       for (const option of options) {
         const radio = new FakeElement('input');
         radio.type = 'radio';
@@ -178,7 +189,7 @@ async function loadPlugin() {
         });
         const radioLabel = new FakeElement('label');
         radioLabel.textContent = option.label;
-        row.append(radio, radioLabel);
+        optionsElement.append(radio, radioLabel);
       }
       return row;
     }
@@ -720,8 +731,8 @@ test('UI reuses standard control rows and the shared effect tab surface', async 
 
   const css = await fs.readFile(
     path.join(repoRoot, 'plugins', 'spatial', 'phase_select_eq.css'), 'utf8');
-  const globalCss = await fs.readFile(path.join(repoRoot, 'effetune.css'), 'utf8');
-  const mobileCss = await fs.readFile(path.join(repoRoot, 'effetune-mobile.css'), 'utf8');
+  const globalCss = await fs.readFile(path.join(repoRoot, 'css/effetune.css'), 'utf8');
+  const mobileCss = await fs.readFile(path.join(repoRoot, 'css/effetune-mobile.css'), 'utf8');
   assert.match(css, /\.phase-select-eq-map\s*\{[^}]*background-color:\s*var\(--et-graph-bg-deep\)/s);
   assert.match(css, /\.phase-select-eq-editor\s*\{[^}]*background:\s*color-mix\(in srgb,\s*var\(--et-surface-10\),\s*var\(--et-graph-bg-deep\) 25%\)/s);
   assert.match(globalCss, /\.phase-select-eq-region-tab\b[^(){}]*\):is\(\.active, \[aria-selected="true"\]\)\s*\{[^}]*background: var\(--et-control-active-gradient\)/s);

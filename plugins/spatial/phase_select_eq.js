@@ -11,6 +11,12 @@ const PHASE_SELECT_EQ_ZERO_TRANSITION_HANDLE_OFFSET = 10;
 const PHASE_SELECT_EQ_FALLBACK_SAMPLE_RATE = 48000;
 const PHASE_SELECT_EQ_FALLBACK_FFT_SIZE = 4096;
 const PHASE_SELECT_EQ_HISTORY_MS = 500;
+const PHASE_SELECT_EQ_DECAY_MS = 220;
+const PHASE_SELECT_EQ_LEVEL_FLOOR_DB = -72;
+// The kernel reports the strongest bin as 10*log10((|L|^2 + |R|^2) / N^2) with a
+// sine window (coherent gain 2/pi); this offset makes a full-scale sine in both
+// channels read 0 dBFS.
+const PHASE_SELECT_EQ_DBFS_OFFSET_DB = 20 * Math.log10(Math.PI) - 10 * Math.log10(2);
 const PHASE_SELECT_EQ_PASS_THROUGH_PROCESSOR = 'return data;';
 
 const PHASE_SELECT_EQ_DEFAULT_REGION = Object.freeze({
@@ -308,17 +314,9 @@ class PhaseSelectEqPlugin extends PluginBase {
             en: index === 0
         }));
         this.selectedRegionIndex = 0;
-        this.xAxisMode = 'phase';
-        this.sampleRate = PHASE_SELECT_EQ_FALLBACK_SAMPLE_RATE;
-        this.fftSize = PHASE_SELECT_EQ_FALLBACK_FFT_SIZE;
-        this.phaseMapFrames = [];
-        this.lastTelemetrySequence = null;
-        this.isVisible = false;
+        this.initializeDisplayState();
         this.animationFrameId = null;
         this.canvas = null;
-        this._graphCssWidth = 720;
-        this._graphCssHeight = 405;
-        this._graphDpr = 1;
         this._graphDisposer = null;
         this._intersectionObserver = null;
         this._pointerState = null;
@@ -337,6 +335,23 @@ class PhaseSelectEqPlugin extends PluginBase {
         this._hiddenAxisBadge = null;
         this._editor = null;
         this.registerProcessor(PHASE_SELECT_EQ_PASS_THROUGH_PROCESSOR);
+    }
+
+    // Map state shared by the effect graph and the Visualizer Phase Map item.
+    initializeDisplayState() {
+        this.xAxisMode = 'phase';
+        this.sampleRate = PHASE_SELECT_EQ_FALLBACK_SAMPLE_RATE;
+        this.fftSize = PHASE_SELECT_EQ_FALLBACK_FFT_SIZE;
+        this.phaseMapFrames = [];
+        this.lastTelemetrySequence = null;
+        this.isVisible = false;
+        this.levelFloorDb = PHASE_SELECT_EQ_LEVEL_FLOOR_DB;
+        this.minimumLevelDb = -Infinity;
+        this.historyMs = PHASE_SELECT_EQ_HISTORY_MS;
+        this.decayMs = PHASE_SELECT_EQ_DECAY_MS;
+        this._graphCssWidth = 720;
+        this._graphCssHeight = 405;
+        this._graphDpr = 1;
     }
 
     getTemporalCapability() {
@@ -363,6 +378,16 @@ class PhaseSelectEqPlugin extends PluginBase {
                         en: index === 0
                     }));
         }
+        // Display-only keys sent by the Visualizer Phase Map item.
+        if (params.ax === 'phase' || params.ax === 'balance') this.xAxisMode = params.ax;
+        if (Number.isFinite(params.dr)) this.levelFloorDb = params.dr;
+        if (Number.isFinite(params.ml)) this.minimumLevelDb = params.ml;
+        if (Number.isFinite(params.pe)) {
+            this.historyMs = params.pe * 1000;
+            this.decayMs = params.pe * 1000 * PHASE_SELECT_EQ_DECAY_MS / PHASE_SELECT_EQ_HISTORY_MS;
+        }
+        // The Visualizer host owns neither the effect controls nor the effect graph.
+        if (this.displayOptions?.deferDraw) return;
         this.updateParameters();
         this._refreshUi();
         this.drawGraph();
@@ -470,6 +495,10 @@ class PhaseSelectEqPlugin extends PluginBase {
         this.sampleRate = snapshot.sampleRate;
         this.fftSize = snapshot.fftSize;
         if (!this.enabled || !this._sectionEnabled || !this.isVisible) return;
+        // Levels are relative to max(strongest component in dBFS, minimumLevelDb), so a
+        // quiet frame's points shrink, fade, and drop below the DB Range floor.
+        const shiftDb = this.minimumLevelDb - (snapshot.frameMaximumDb + PHASE_SELECT_EQ_DBFS_OFFSET_DB);
+        if (shiftDb > 0) for (const point of snapshot.points) point.relativeLevelDb -= shiftDb;
         const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
         this.phaseMapFrames.push({ time: now, points: snapshot.points });
         this._discardOldMapFrames(now);
@@ -477,7 +506,7 @@ class PhaseSelectEqPlugin extends PluginBase {
 
     _discardOldMapFrames(now) {
         while (this.phaseMapFrames.length &&
-            now - this.phaseMapFrames[0].time > PHASE_SELECT_EQ_HISTORY_MS) {
+            now - this.phaseMapFrames[0].time > this.historyMs) {
             this.phaseMapFrames.shift();
         }
     }
@@ -880,7 +909,7 @@ class PhaseSelectEqPlugin extends PluginBase {
         this._axisControls = axisControls;
         this._hiddenAxisBadge = document.createElement('span');
         this._hiddenAxisBadge.className = 'phase-select-eq-hidden-axis-badge';
-        axisControls.appendChild(this._hiddenAxisBadge);
+        axisControls.querySelector('.radio-options').appendChild(this._hiddenAxisBadge);
         container.appendChild(axisControls);
 
         const graph = this.createResponsiveGraph({
@@ -921,6 +950,21 @@ class PhaseSelectEqPlugin extends PluginBase {
         document.addEventListener('keydown', this._boundKeyDown);
         this._refreshUi();
         this.drawGraph();
+        this._graphReadout = window.GraphReadout?.attach({
+            mount: graph.container,
+            surface: this.canvas,
+            read: (x, y) => this._readMap(x, y),
+            avoid: () => {
+                const frame = this._readoutFrame;
+                return frame?.valid ? frame.labels.map(rect => ({
+                    left: rect.left * frame.scale,
+                    top: rect.top * frame.scale,
+                    width: rect.width * frame.scale,
+                    height: rect.height * frame.scale
+                })) : [];
+            },
+            crosshair: 'xy'
+        });
         return container;
     }
 
@@ -1407,6 +1451,7 @@ class PhaseSelectEqPlugin extends PluginBase {
         ctx.fillStyle = color;
         ctx.fillText(constraint, badgeX + 4, y + 2);
         ctx.restore();
+        return { left: groupX, top: y, width: groupWidth, height: 15 };
     }
 
     _hiddenAxisWeight(point) {
@@ -1416,6 +1461,118 @@ class PhaseSelectEqPlugin extends PluginBase {
         const value = constraint.name === 'Phase' ? Math.abs(point.phase) : point.balance;
         return phaseSelectEqAxisWeight(value, constraint.outerLow, constraint.coreLow,
             constraint.coreHigh, constraint.outerHigh);
+    }
+
+    _themeColor(name) {
+        return (this.displayOptions?.themePalette ?? window.ThemePalette)?.get(name) ?? '';
+    }
+
+    // Grid lines and labels in CSS pixels; a null labelContext omits the labels.
+    // When given, labelRects collects each drawn label's CSS-pixel rectangle.
+    _drawPhaseMapGrid(context, showLines, labelContext, labelRects = null) {
+        const plot = this._plotRect();
+        // The Visualizer palette carries only its shared roles, so labels use its graph-label role there.
+        const labelColor = this._themeColor(this.displayOptions ? 'graph-label' : 'graph-tone-50');
+        context.font = '12px Arial';
+        context.textBaseline = 'bottom';
+        const axisGrid = phaseSelectEqAxisGrid(this.xAxisMode, this._graphCssWidth);
+        for (let index = 0; index < axisGrid.length; index++) {
+            const [value, label] = axisGrid[index];
+            const x = this._horizontalToX(value);
+            if (showLines) {
+                context.strokeStyle = this._themeColor('graph-grid-soft');
+                context.lineWidth = value === 0 ? 1.5 : 1;
+                context.beginPath();
+                context.moveTo(x, plot.top);
+                context.lineTo(x, plot.bottom);
+                context.stroke();
+            }
+            if (!labelContext) continue;
+            context.fillStyle = labelColor;
+            context.textAlign = index === 0 ? 'left'
+                : (index === axisGrid.length - 1 ? 'right' : 'center');
+            labelContext.fillText(label, x, plot.bottom - 25);
+            if (labelRects) {
+                const labelWidth = context.measureText?.(label)?.width ?? 0;
+                const labelLeft = index === 0 ? x
+                    : (index === axisGrid.length - 1 ? x - labelWidth : x - labelWidth / 2);
+                labelRects.push({ left: labelLeft, top: plot.bottom - 39, width: labelWidth, height: 14 });
+            }
+        }
+        const frequencies = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
+            .filter(frequency => frequency < this._maximumDisplayFrequency());
+        context.textAlign = 'right';
+        context.textBaseline = 'middle';
+        for (const frequency of frequencies) {
+            const y = this._frequencyToY(frequency);
+            if (showLines) {
+                context.strokeStyle = this._themeColor('graph-grid-soft');
+                context.lineWidth = 1;
+                context.beginPath();
+                context.moveTo(plot.left, y);
+                context.lineTo(plot.right, y);
+                context.stroke();
+            }
+            if (!labelContext) continue;
+            context.fillStyle = labelColor;
+            const label = frequency >= 1000 ? `${frequency / 1000}k` : String(frequency);
+            labelContext.fillText(label, plot.left + 40, y);
+            if (labelRects) {
+                const labelWidth = context.measureText?.(label)?.width ?? 0;
+                labelRects.push({ left: plot.left + 40 - labelWidth, top: y - 7, width: labelWidth, height: 14 });
+            }
+        }
+    }
+
+    // paint(point, level, ageOpacity, y) sets the fill style and alpha of each point;
+    // radiusScale multiplies the level-dependent point radius in CSS pixels.
+    _drawPhaseMapPoints(context, now, paint, radiusScale = 1) {
+        const floorDb = this.levelFloorDb;
+        for (const frame of this.phaseMapFrames) {
+            const ageOpacity = Math.exp(-(now - frame.time) / this.decayMs);
+            for (const point of frame.points) {
+                if (point.relativeLevelDb < floorDb) continue;
+                const level = phaseSelectEqClamp((point.relativeLevelDb - floorDb) / -floorDb, 0, 1);
+                const y = this._frequencyToY(point.frequency);
+                paint(point, level, ageOpacity, y);
+                context.beginPath();
+                context.arc(this._horizontalToX(this.xAxisMode === 'balance' ? point.balance : point.phase),
+                    y, radiusScale * (0.6 + 1.1 * level), 0, Math.PI * 2);
+                context.fill();
+            }
+        }
+        context.globalAlpha = 1;
+    }
+
+    // Visualizer Phase Map item: axes and points only, drawn under the host's flip transform.
+    drawVisualizerPhaseMap() {
+        const canvas = this.canvas;
+        const context = this.ctx;
+        if (!canvas || !context) return;
+        const options = this.displayOptions || {};
+        const dpr = this.graphDpr || 1;
+        this._graphCssWidth = canvas.width / dpr;
+        this._graphCssHeight = canvas.height / dpr;
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.save();
+        context.scale(dpr, dpr);
+        const showLines = options.showAxes !== false;
+        const labelContext = options.showAxisNumbers !== false ? options.textContext ?? context : null;
+        if (showLines || labelContext) this._drawPhaseMapGrid(context, showLines, labelContext);
+        const now = performance.now();
+        this._discardOldMapFrames(now);
+        const height = this._graphCssHeight;
+        const fallbackColor = this._themeColor('text-primary');
+        // The point cloud is the item's subject here, so points scale with the plot and stay opaque
+        // enough to read at low levels while strong components still stand out.
+        const radiusScale = Math.max(1.5, Math.min(this._graphCssWidth, height) / 250);
+        const draw = target => this._drawPhaseMapPoints(target, now, (_point, level, ageOpacity, y) => {
+            target.globalAlpha = ageOpacity * (0.35 + 0.65 * level);
+            target.fillStyle = options.pointColor?.(1 - y / height, level) ?? fallbackColor;
+        }, radiusScale);
+        if (options.drawSignal) options.drawSignal(context, draw);
+        else draw(context);
+        context.restore();
     }
 
     drawGraph() {
@@ -1430,41 +1587,10 @@ class PhaseSelectEqPlugin extends PluginBase {
         context.fillStyle = (window.ThemePalette?.get('graph-bg-deep') ?? '');
         context.fillRect(0, 0, width, height);
         const plot = this._plotRect();
-
-        context.font = '12px Arial';
-        context.textBaseline = 'bottom';
-        const axisGrid = phaseSelectEqAxisGrid(this.xAxisMode, width);
-        for (let index = 0; index < axisGrid.length; index++) {
-            const [value, label] = axisGrid[index];
-            const x = this.xAxisMode === 'phase'
-                ? this._phaseToX(value) : this._balanceToX(value);
-            context.strokeStyle = (window.ThemePalette?.get('graph-grid-soft') ?? '');
-            context.lineWidth = value === 0 ? 1.5 : 1;
-            context.beginPath();
-            context.moveTo(x, plot.top);
-            context.lineTo(x, plot.bottom);
-            context.stroke();
-            context.fillStyle = (window.ThemePalette?.get('graph-tone-50') ?? '');
-            context.textAlign = index === 0 ? 'left'
-                : (index === axisGrid.length - 1 ? 'right' : 'center');
-            context.fillText(label, x, plot.bottom - 25);
-        }
-        const frequencies = [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
-            .filter(frequency => frequency < this._maximumDisplayFrequency());
-        context.textAlign = 'right';
-        context.textBaseline = 'middle';
-        for (const frequency of frequencies) {
-            const y = this._frequencyToY(frequency);
-            context.strokeStyle = (window.ThemePalette?.get('graph-grid-soft') ?? '');
-            context.lineWidth = 1;
-            context.beginPath();
-            context.moveTo(plot.left, y);
-            context.lineTo(plot.right, y);
-            context.stroke();
-            context.fillStyle = (window.ThemePalette?.get('graph-tone-50') ?? '');
-            context.fillText(frequency >= 1000 ? `${frequency / 1000}k` : String(frequency),
-                plot.left + 40, y);
-        }
+        const frame = (this._readoutFrame ??= {});
+        const labels = (frame.labels ??= []);
+        labels.length = 0;
+        this._drawPhaseMapGrid(context, true, context, labels);
 
         const geometry = this.regions.map(region => this._regionGeometry(region));
         for (let index = 0; index < this.regions.length; index++) {
@@ -1481,24 +1607,12 @@ class PhaseSelectEqPlugin extends PluginBase {
 
         const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
         this._discardOldMapFrames(now);
-        for (const frame of this.phaseMapFrames) {
-            const ageOpacity = Math.exp(-(now - frame.time) / 220);
-            for (const point of frame.points) {
-                if (point.relativeLevelDb < -72) continue;
-                const level = phaseSelectEqClamp((point.relativeLevelDb + 72) / 72, 0, 1);
-                const hiddenAxisWeight = this._hiddenAxisWeight(point);
-                context.globalAlpha = ageOpacity * (0.15 + 0.75 * level) *
-                    (0.18 + 0.82 * hiddenAxisWeight);
-                context.fillStyle = (window.ThemePalette?.get('text-primary') ?? '');
-                context.beginPath();
-                const pointX = this.xAxisMode === 'phase'
-                    ? this._phaseToX(point.phase) : this._balanceToX(point.balance);
-                context.arc(pointX, this._frequencyToY(point.frequency),
-                    0.6 + 1.1 * level, 0, Math.PI * 2);
-                context.fill();
-            }
-        }
-        context.globalAlpha = 1;
+        const pointColor = (window.ThemePalette?.get('text-primary') ?? '');
+        this._drawPhaseMapPoints(context, now, (point, level, ageOpacity) => {
+            context.globalAlpha = ageOpacity * (0.15 + 0.75 * level) *
+                (0.18 + 0.82 * this._hiddenAxisWeight(point));
+            context.fillStyle = pointColor;
+        });
 
         for (let index = 0; index < this.regions.length; index++) {
             const region = this.regions[index];
@@ -1506,11 +1620,13 @@ class PhaseSelectEqPlugin extends PluginBase {
             for (const rectangle of geometry[index].core) {
                 const color = index === this.selectedRegionIndex
                     ? (window.ThemePalette?.get('graph-handle-active') ?? '') : (window.ThemePalette?.get('graph-handle') ?? '');
-                this._drawBandLabel(context, rectangle, index, color, plot);
+                labels.push(this._drawBandLabel(context, rectangle, index, color, plot));
             }
         }
 
         for (const handle of this._selectedHandles()) {
+            // The avoided square matches the 22 px handle grab radius.
+            labels.push({ left: handle.x - 11, top: handle.y - 11, width: 22, height: 22 });
             context.save();
             context.translate(handle.x, handle.y);
             context.fillStyle = handle.outer ? (window.ThemePalette?.get('graph-base') ?? '') : (window.ThemePalette?.get('graph-handle-active') ?? '');
@@ -1530,6 +1646,20 @@ class PhaseSelectEqPlugin extends PluginBase {
             }
             context.restore();
         }
+        frame.valid = true;
+        frame.scale = dpr;
+        this._graphReadout?.refresh();
+    }
+
+    // Reads the map coordinates under canvas pixel (x, y): frequency and phase difference or balance.
+    _readMap(x, y) {
+        const frame = this._readoutFrame;
+        if (!frame?.valid) return null;
+        const { format } = window.GraphReadout;
+        const horizontal = this._xToHorizontal(x / frame.scale);
+        const value = this.xAxisMode === 'balance'
+            ? phaseSelectEqBalanceRatio(horizontal) : format.degrees(horizontal);
+        return { cursor: `${format.frequency(this._yToFrequency(y / frame.scale))} · ${value}`, rows: [] };
     }
 
     cleanup() {

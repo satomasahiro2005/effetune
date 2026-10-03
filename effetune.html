@@ -130,9 +130,9 @@
     }
     </script>
 
-    <link rel="stylesheet" href="effetune.css">
-    <link rel="stylesheet" href="effetune-mobile.css">
-    <link rel="stylesheet" href="user-data-backup.css">
+    <link rel="stylesheet" href="css/effetune.css">
+    <link rel="stylesheet" href="css/effetune-mobile.css">
+    <link rel="stylesheet" href="css/user-data-backup.css">
     <link rel="icon" href="images/favicon.ico" type="image/x-icon">
     <link rel="icon" href="images/icon_192x192.png" type="image/png" sizes="192x192">
     <link rel="apple-touch-icon" sizes="180x180" href="images/icon_180x180.png">
@@ -197,8 +197,13 @@
             try {
                 var params = new URLSearchParams(window.location.search || '');
                 // Keep these conditions in sync with hasExplicitStartupViewRequest()
-                // in js/app.js: a URL that asks for a specific pipeline overrides the
-                // startup view preference. A reload of our reflected URL keeps that preference.
+                // in js/app.js: a Visualizer share link opens the Visualizer, and a URL that
+                // asks for a specific pipeline overrides the startup view preference.
+                // A reload of our reflected URL keeps that preference.
+                if (params.has('v')) {
+                    document.body.classList.add('view-visualizer');
+                    return;
+                }
                 var reflectedPipeline = window.history && window.history.state && window.history.state.effetuneReflectedPipeline;
                 if ((params.has('p') && reflectedPipeline !== params.get('p')) || params.has('dbt') ||
                     params.get('restorePipeline') === 'transient') {
@@ -215,7 +220,7 @@
                     // The class hides the effect pipeline only once this sheet is present.
                     var librarySheet = document.createElement('link');
                     librarySheet.rel = 'stylesheet';
-                    librarySheet.href = 'effetune-library.css';
+                    librarySheet.href = 'css/effetune-library.css';
                     document.head.appendChild(librarySheet);
                 }
             } catch (error) {

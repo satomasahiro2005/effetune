@@ -17,7 +17,7 @@ function getRule(css, selector) {
 }
 
 test('active player buttons replace the neutral face gradient with the accent surface', () => {
-  const css = readCss('../../effetune.css');
+  const css = readCss('../../css/effetune.css');
   const baseSelector = '.player-button[data-active="true"]';
   const hoverSelector = `${baseSelector}:hover:not(:disabled)`;
   const activeSelector = `${baseSelector}:active:not(:disabled)`;
@@ -46,7 +46,7 @@ test('active player buttons replace the neutral face gradient with the accent su
 });
 
 test('paged queue scrolling reserves the sticky pagination height', () => {
-  const css = readCss('../../effetune.css');
+  const css = readCss('../../css/effetune.css');
   const playlistRule = getRule(css, '.player-playlist');
   const paginationRule = getRule(css, '.player-queue-pagination');
   const pagedItemRule = getRule(css, '.player-queue-pagination ~ .player-playlist-item');
@@ -63,7 +63,7 @@ test('paged queue scrolling reserves the sticky pagination height', () => {
 });
 
 test('desktop mini player keeps controls interactive and preserves notification visibility', () => {
-  const css = readCss('../../effetune.css');
+  const css = readCss('../../css/effetune.css');
   const bodyRule = getRule(css, 'body.layout-mini-player');
   const playerRule = getRule(css, 'body.layout-mini-player .audio-player[data-mini-player="true"]');
   const seekRule = getRule(css, 'body.layout-mini-player .audio-player[data-mini-player="true"] .seek-bar');

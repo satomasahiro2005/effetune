@@ -6,6 +6,13 @@ lang: en
 
 # Version History
 
+### Version 2.12.0 (Oct 2, 2026)
+- Added Analog Meter, Rhythm Analyzer and Tonal Balance EQ effects
+- Added Phase Map and Analog Meter to the Visualizer, along with extensive feature enhancements
+- Added Visualizer to the browser extension
+- Added music player and preset controls to Controller Mapping
+- Various minor improvements
+
 ### Version 2.11.0 (Sep 25, 2026)
 - Added customizable Visualizer layouts and presets
 - Added Attack Tonal Balance, Bass Extender, Bass Management and Chroma Spiral effects

@@ -58,11 +58,13 @@ test('rollout enables only shipped kernels with matching generated layouts', () 
   assert.deepEqual(filterEnabledDspTypes({ meta: null, paramPackers }), []);
   assert.deepEqual(filterEnabledDspTypes({ meta, paramPackers: null }), []);
   assert.deepEqual(SHIPPED_ENABLED_TYPES, [
+    'AnalogMeterPlugin',
     'ChromaSpiralPlugin',
     'LevelMeterPlugin',
     'NoteSpectrogramPlugin',
     'OscilloscopePlugin',
     'PitchMeterPlugin',
+    'RhythmAnalyzerPlugin',
     'SpectrogramPlugin',
     'SpectrumAnalyzerPlugin',
     'StereoMeterPlugin',
@@ -105,6 +107,7 @@ test('rollout enables only shipped kernels with matching generated layouts', () 
     'NarrowRangePlugin',
     'RoomEqPlugin',
     'TiltEQPlugin',
+    'TonalBalanceEQPlugin',
     'ToneControlPlugin',
     'AMRadioSimulatorPlugin',
     'BitCrusherPlugin',

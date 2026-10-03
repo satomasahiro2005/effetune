@@ -245,6 +245,23 @@ test('atomic changed-only saves preserve an active operation for equal snapshots
   assert.equal(manager.history[1].pipelineA[0].gain, 1);
 });
 
+test('atomic plugin saves ignore unrecorded changes in other plugins', () => {
+  const automated = createSourcePlugin('Radio', { serialized: { nm: 'Radio', st: 0.3 } });
+  const updating = createSourcePlugin('Room', { serialized: { nm: 'Room', dl: 0 } });
+  const runtime = createRuntime({ pipelineA: [automated, updating] });
+  const manager = new HistoryManager(runtime.pipelineManager);
+  manager.saveState();
+
+  automated.serialized.st = 0.4;
+  assert.equal(manager.saveStateAtomicallyIfChanged(updating), false);
+  assert.equal(manager.history.length, 1);
+
+  updating.serialized.dl = 1;
+  assert.equal(manager.saveStateAtomicallyIfChanged(updating), true);
+  assert.equal(manager.history.length, 2);
+  assert.equal(manager.history[1].pipelineA[1].dl, 1);
+});
+
 test('token ownership remains at the tip when the history limit shifts', () => {
   const plugin = createSourcePlugin('Tone', { serialized: { nm: 'Tone', gain: 0 } });
   const runtime = createRuntime({ pipelineA: [plugin] });
@@ -485,4 +502,23 @@ test('loadStateFromHistory restores suppression after a missing history entry', 
 
   assert.equal(runtime.calls.some(call => call[0] === 'updatePipelineUI'), false);
   assert.equal(runtime.calls.some(call => call[0] === 'querySelector'), false);
+});
+
+test('canUndo and canRedo follow saves, undo, and redo and refresh the edit buttons', async () => {
+  const runtime = createRuntime({ pipelineA: [createSourcePlugin('Alpha', { serialized: { nm: 'Alpha', gain: 0 } })] });
+  const manager = new HistoryManager(runtime.pipelineManager);
+  manager.loadStateFromHistory = () => {};
+  let refreshes = 0;
+  await withGlobals({ window: { uiManager: { updateEditButtons: () => refreshes++ } } }, () => {
+    const state = () => [manager.canUndo, manager.canRedo, refreshes];
+    manager.saveState();
+    assert.deepEqual(state(), [false, false, 1]);
+    runtime.audioManager.pipelineA[0].serialized.gain = 1;
+    manager.saveState();
+    assert.deepEqual(state(), [true, false, 2]);
+    manager.undo();
+    assert.deepEqual(state(), [false, true, 3]);
+    manager.redo();
+    assert.deepEqual(state(), [true, false, 4]);
+  });
 });

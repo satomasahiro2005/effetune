@@ -167,8 +167,8 @@ test('replaceable menu actions are rebound without leaking click handlers', () =
 
 test('power UI uses existing menu rows and contains no custom message surface', () => {
   const html = readFileSync(new URL('../../effetune.html', import.meta.url), 'utf8');
-  const desktopCss = readFileSync(new URL('../../effetune.css', import.meta.url), 'utf8');
-  const mobileCss = readFileSync(new URL('../../effetune-mobile.css', import.meta.url), 'utf8');
+  const desktopCss = readFileSync(new URL('../../css/effetune.css', import.meta.url), 'utf8');
+  const mobileCss = readFileSync(new URL('../../css/effetune-mobile.css', import.meta.url), 'utf8');
   const appSource = readFileSync(new URL('../../js/app.js', import.meta.url), 'utf8');
   const contextSource = readFileSync(
     new URL('../../js/audio/audio-context-manager.js', import.meta.url),

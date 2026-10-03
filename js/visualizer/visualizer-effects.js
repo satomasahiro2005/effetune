@@ -40,6 +40,47 @@ export function paletteGradient(ctx, palette, width, time, vertical = false) {
     return gradient;
 }
 
+// Backplates are drawn on the stage behind the item at full resolution, so they
+// never pass through the reduced-resolution layer chain below.
+export const isLayerEffect = effect => effect.enabled && effect.type !== 'backplate';
+
+export function effectAmount(effect, time, modulators) {
+    const source = effect.mod.source;
+    if (source === 'none' || effect.mod.depth === 0) return effect.amount;
+    const modulation = source === 'time' ? (1 + Math.sin(time * effect.mod.speed * Math.PI * 2)) / 2 : (modulators[source] || 0);
+    return clamp(effect.amount * (1 - effect.mod.depth) + modulation * effect.mod.depth);
+}
+
+// Border width, corner radius, and margin use the 1280-wide reference units; `scale`
+// converts them. The margin grows or shrinks the item rectangle, and the border stays inside it.
+export function drawBackplates(ctx, x, y, w, h, effects, time, modulators, scale) {
+    for (const effect of effects) {
+        if (!effect.enabled || effect.type !== 'backplate') continue;
+        const amount = effectAmount(effect, time, modulators);
+        const margin = Math.max(effect.margin * scale, -w / 2, -h / 2);
+        const x0 = x - margin, y0 = y - margin, w0 = w + margin * 2, h0 = h + margin * 2;
+        if (amount <= 0 || w0 <= 0 || h0 <= 0) continue;
+        const border = Math.min(effect.borderWidth * scale, w0 / 2, h0 / 2);
+        const inset = border / 2, pw = w0 - border, ph = h0 - border;
+        const radius = Math.max(0, Math.min(effect.radius * scale - inset, pw / 2, ph / 2));
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(x0 + inset, y0 + inset, pw, ph, radius);
+        if (effect.fillOpacity > 0) {
+            ctx.globalAlpha = amount * effect.fillOpacity;
+            ctx.fillStyle = effect.fill;
+            ctx.fill();
+        }
+        if (border > 0) {
+            ctx.globalAlpha = amount;
+            ctx.strokeStyle = effect.border;
+            ctx.lineWidth = border;
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+}
+
 export function animatedEffects(effects = []) {
     return effects.some(effect => effect.enabled && (effect.mod.source !== 'none' ||
         effect.palette.motion.mode !== 'none' || ['trail', 'trail-feedback', 'particles', 'shake', 'ken-burns'].includes(effect.type)));
@@ -50,13 +91,15 @@ export function animatedEffects(effects = []) {
 export class VisualizerEffects {
     constructor() { this.states = new Map(); }
     prune(ids) { for (const id of this.states.keys()) if (!ids.has(id)) this.states.delete(id); }
-    apply(id, input, effects, time, modulators, quality = 0, changed = true, flipX = false, flipY = false) {
+    // `scale` is the output width over the 1280-wide reference, so pixel radii keep
+    // the same proportion to the scene at any output resolution.
+    apply(id, input, effects, time, modulators, quality = 0, changed = true, flipX = false, flipY = false, scale = 1) {
         const factor = quality > 0 ? .35 : .65;
         const width = Math.max(1, Math.round(input.width * factor));
         const height = Math.max(1, Math.round(input.height * factor));
-        const active = effects.filter(effect => effect.enabled);
+        const active = effects.filter(isLayerEffect);
         const padding = active.reduce((max, effect) => effect.type === 'glow'
-            ? Math.max(max, Math.ceil(glowRadius(effect.amount + effect.mod.depth) * 3)) : max, 0);
+            ? Math.max(max, Math.ceil(glowRadius(effect.amount + effect.mod.depth) * scale * 3)) : max, 0);
         const workWidth = width + padding * 2, workHeight = height + padding * 2;
         let state = this.states.get(id);
         if (!state || state.a.width !== workWidth || state.a.height !== workHeight || state.padding !== padding) {
@@ -71,20 +114,14 @@ export class VisualizerEffects {
         const transform = { opacity: 1, scale: 1, x: 0, y: 0 };
         if (!active.length) return { canvas: input, ...transform };
         if (!changed && !animatedEffects(active) && state.result) return state.result;
-        const effectAmount = effect => {
-            const source = effect.mod.source;
-            if (source === 'none' || effect.mod.depth === 0) return effect.amount;
-            const modulation = source === 'time' ? (1 + Math.sin(time * effect.mod.speed * Math.PI * 2)) / 2 : (modulators[source] || 0);
-            return clamp(effect.amount * (1 - effect.mod.depth) + modulation * effect.mod.depth);
-        };
         for (const effect of active) {
-            if (effect.type === 'scale-pulse') transform.scale *= 1 + effectAmount(effect) * .25;
+            if (effect.type === 'scale-pulse') transform.scale *= 1 + effectAmount(effect, time, modulators) * .25;
             else if (effect.type === 'shake') {
-                const amount = effectAmount(effect);
+                const amount = effectAmount(effect, time, modulators);
                 transform.x += Math.sin(time * 53) * amount * .04;
                 transform.y += Math.cos(time * 71) * amount * .04;
             } else if (effect.type === 'ken-burns') {
-                const amount = effectAmount(effect);
+                const amount = effectAmount(effect, time, modulators);
                 transform.scale *= 1 + amount * .15;
                 transform.x += Math.sin(time * .12) * amount * .035;
                 transform.y += Math.cos(time * .09) * amount * .035;
@@ -107,7 +144,7 @@ export class VisualizerEffects {
         for (let index = 0; index < active.length; index++) {
             const effect = active[index];
             if (effect.type === 'scale-pulse' || effect.type === 'shake' || effect.type === 'ken-burns') continue;
-            const amount = effectAmount(effect);
+            const amount = effectAmount(effect, time, modulators);
             if (effect.type === 'opacity') { transform.opacity *= amount; continue; }
             ctx = next.getContext('2d');
             ctx.clearRect(0, 0, workWidth, workHeight);
@@ -123,7 +160,7 @@ export class VisualizerEffects {
                 scratch.fillStyle = color;
                 scratch.fillRect(0, 0, small.width, small.height);
                 scratch.globalCompositeOperation = 'source-over';
-                ctx.filter = `blur(${glowRadius(amount)}px)`;
+                ctx.filter = `blur(${glowRadius(amount) * scale}px)`;
                 ctx.globalAlpha = .25;
                 ctx.drawImage(current, 0, 0);
                 ctx.filter = 'none';
@@ -147,7 +184,7 @@ export class VisualizerEffects {
                     scratch.globalCompositeOperation = 'source-over';
                 }
                 if (effect.type === 'outline') {
-                    const offset = 1 + amount * 6;
+                    const offset = (1 + amount * 6) * scale;
                     for (let angle = 0; angle < 8; angle++) ctx.drawImage(small, Math.cos(angle * Math.PI / 4) * offset, Math.sin(angle * Math.PI / 4) * offset, workWidth, workHeight);
                 } else ctx.drawImage(small, 0, 0, workWidth, workHeight);
                 if (effect.type !== 'blur') { ctx.drawImage(current, 0, 0); }
@@ -189,7 +226,8 @@ export class VisualizerEffects {
                 for (const particle of state.particles) {
                     if (particle.life <= 0) continue;
                     particle.life -= dt; particle.x += particle.vx * dt; particle.y += particle.vy * dt;
-                    ctx.globalAlpha = Math.max(0, particle.life); ctx.fillRect(particle.x, particle.y, 2 + amount * 4, 2 + amount * 4);
+                    const size = (2 + amount * 4) * scale;
+                    ctx.globalAlpha = Math.max(0, particle.life); ctx.fillRect(particle.x, particle.y, size, size);
                 }
             } else {
                 ctx.drawImage(current, 0, 0);

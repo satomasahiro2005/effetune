@@ -4,8 +4,8 @@ import test from 'node:test';
 import { chromium } from 'playwright';
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
-const css = read('../../effetune-theme.css') +
-  read('../../effetune.css').replace('@import url("effetune-theme.css");', '');
+const css = read('../../css/effetune-theme.css') +
+  read('../../css/effetune.css').replace('@import url("effetune-theme.css");', '');
 
 test('long artist and title do not move desktop playback controls', async () => {
   const browser = await chromium.launch({ headless: true });

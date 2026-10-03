@@ -1,6 +1,6 @@
-@import url("../../effetune-theme.css");
+@import url("../../css/effetune-theme.css");
 
-/* Theme aliases matching effetune.css */
+/* Theme aliases matching css/effetune.css */
 :root {
     --bg-color: var(--et-surface-3);
     --text-color: color-mix(in srgb, var(--et-base), var(--et-text-primary) 90%);
@@ -10,7 +10,7 @@
     --warning-color: var(--et-danger);
     --success-color: var(--et-success);
     --hover-color: color-mix(in srgb, var(--et-base), var(--et-text-primary) 18%);
-    --content-padding: 20px; /* effetune.css standard padding */
+    --content-padding: 20px; /* css/effetune.css standard padding */
 }
 
 * {
@@ -235,6 +235,10 @@ input[type="radio"] {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+}
+
+.channel-checkbox-group label[hidden] {
+    display: none;
 }
 
 .channel-checkbox-group label {
@@ -818,7 +822,7 @@ canvas {
     margin-top: var(--content-padding);
 }
 
-/* Scrollbar styles from effetune.css */
+/* Scrollbar styles from css/effetune.css */
 ::-webkit-scrollbar {
     width: 12px;
     height: 12px;

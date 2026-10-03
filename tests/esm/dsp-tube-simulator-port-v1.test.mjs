@@ -1436,7 +1436,7 @@ test('Tube Simulator UI wiring pins the tab roles and tab sizing',
       fs.readFile(
         path.join(repoRoot, 'plugins', 'saturation', 'tube_simulator.css'), 'utf8'
       ),
-      fs.readFile(path.join(repoRoot, 'effetune.css'), 'utf8')
+      fs.readFile(path.join(repoRoot, 'css/effetune.css'), 'utf8')
     ]);
     assert.match(source, /setAttribute\('role', 'tablist'\)/);
     assert.match(source, /setAttribute\('role', 'tabpanel'\)/);

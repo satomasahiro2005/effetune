@@ -32,24 +32,25 @@ export function createUpdateNotification(updateInfo, {
     }
 
     const idleLabel = translate(windowRef, 'ui.downloadUpdate', 'Download update');
-    const downloadButton = documentRef.createElement('button');
-    downloadButton.type = 'button';
-    downloadButton.className = 'update-release-link update-download-button';
-    downloadButton.textContent = idleLabel;
-    downloadButton.title = translate(
+    const downloadingLabel = translate(windowRef, 'ui.downloadingUpdate', 'Downloading...');
+    const restartHint = translate(
         windowRef,
         'ui.downloadUpdateTitle',
         'EffeTune will restart when the update is complete.'
     );
+    const downloadButton = documentRef.createElement('button');
+    downloadButton.type = 'button';
+    downloadButton.className = 'update-download-button';
+    downloadButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="M12 6.5v8m0 0-3-3m3 3 3-3M8 17h8"/></svg>';
+    downloadButton.title = `${idleLabel}\n${restartHint}`;
+    downloadButton.setAttribute('aria-label', idleLabel);
+    downloadButton.setAttribute('aria-description', restartHint);
     downloadButton.addEventListener('click', async () => {
         if (downloadButton.disabled) return;
 
         downloadButton.disabled = true;
-        downloadButton.textContent = translate(
-            windowRef,
-            'ui.downloadingUpdate',
-            'Downloading...'
-        );
+        downloadButton.title = downloadingLabel;
+        downloadButton.setAttribute('aria-label', downloadingLabel);
 
         try {
             const result = await downloadUpdate();
@@ -59,7 +60,8 @@ export function createUpdateNotification(updateInfo, {
         }
 
         downloadButton.disabled = false;
-        downloadButton.textContent = idleLabel;
+        downloadButton.title = `${idleLabel}\n${restartHint}`;
+        downloadButton.setAttribute('aria-label', idleLabel);
         windowRef.uiManager?.setError?.('ui.updateDownloadFailed', true);
     });
     container.appendChild(downloadButton);

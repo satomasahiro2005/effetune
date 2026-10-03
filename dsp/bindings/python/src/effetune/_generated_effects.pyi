@@ -11,6 +11,20 @@ class IRReverbAssets(TypedDict):
 EFFECT_METADATA: dict[str, object]
 _EFFECT_IMPLEMENTATION: dict[str, dict[str, object]]
 
+class AnalogMeter(Effect):
+    effect_type: Literal["AnalogMeter"]
+    def __init__(
+        self,
+        *,
+        mode: Literal["VU", "PPM", "RMS", "Sample Peak", "True Peak", "Loudness"] = ...,
+        integration: float = ...,
+        attack: float = ...,
+        release: float = ...,
+        id: str | None = ...,
+        enabled: bool = ...,
+        channel: EffectChannel = ...,
+    ) -> None: ...
+
 class ChromaSpiral(Effect):
     effect_type: Literal["ChromaSpiral"]
     def __init__(
@@ -50,7 +64,7 @@ class Oscilloscope(Effect):
         self,
         *,
         display_time: float = ...,
-        trigger_mode: Literal["Auto", "Normal"] = ...,
+        trigger_mode: Literal["Auto", "Normal", "Off"] = ...,
         trigger_level: float = ...,
         trigger_edge: Literal["Rising", "Falling"] = ...,
         holdoff: float = ...,
@@ -69,6 +83,19 @@ class PitchMeter(Effect):
         reference_a4: float = ...,
         minimum_midi: int = ...,
         maximum_midi: int = ...,
+        id: str | None = ...,
+        enabled: bool = ...,
+        channel: EffectChannel = ...,
+    ) -> None: ...
+
+class RhythmAnalyzer(Effect):
+    effect_type: Literal["RhythmAnalyzer"]
+    def __init__(
+        self,
+        *,
+        minimum_bpm: float = ...,
+        maximum_bpm: float = ...,
+        metronome_click: bool = ...,
         id: str | None = ...,
         enabled: bool = ...,
         channel: EffectChannel = ...,
@@ -687,6 +714,32 @@ class TiltEQ(Effect):
         *,
         pivot_frequency: float = ...,
         slope: float = ...,
+        id: str | None = ...,
+        enabled: bool = ...,
+        channel: EffectChannel = ...,
+    ) -> None: ...
+
+class TonalBalanceEQ(Effect):
+    effect_type: Literal["TonalBalanceEQ"]
+    def __init__(
+        self,
+        *,
+        target: Literal["All", "Classical", "Electronic", "Pop", "Rock", "Tilt"] = ...,
+        amount: float = ...,
+        range: float = ...,
+        smoothing: float = ...,
+        averaging_time: float = ...,
+        low: float = ...,
+        high: float = ...,
+        average_spl: float = ...,
+        adjust_enabled: tuple[bool, bool, bool, bool, bool] = ...,
+        adjust_type: tuple[Literal["pk", "ls", "hs"], Literal["pk", "ls", "hs"], Literal["pk", "ls", "hs"], Literal["pk", "ls", "hs"], Literal["pk", "ls", "hs"]] = ...,
+        adjust_frequency: tuple[float, float, float, float, float] = ...,
+        adjust_gain: tuple[float, float, float, float, float] = ...,
+        adjust_q: tuple[float, float, float, float, float] = ...,
+        tilt_slope: float = ...,
+        tilt_corner: float = ...,
+        measurement_paused: bool = ...,
         id: str | None = ...,
         enabled: bool = ...,
         channel: EffectChannel = ...,

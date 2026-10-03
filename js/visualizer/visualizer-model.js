@@ -1,14 +1,23 @@
+import { encodePipelineState, decodePipelineState } from '../utils/pipeline-state-codec.js';
+
 export const ASPECTS = ['16:9', '21:9', '4:3', '1:1', '9:16'];
 export const ASPECT_FILES = Object.freeze({
     '16:9': '16x9.json', '21:9': '21x9.json', '4:3': '4x3.json',
     '1:1': '1x1.json', '9:16': '9x16.json'
 });
 
-export const VISUAL_TYPES = ['spectrum', 'spectrogram', 'oscilloscope', 'stereo', 'level-meter', 'notes', 'chroma'];
+export const VISUAL_TYPES = ['spectrum', 'spectrogram', 'oscilloscope', 'stereo', 'level-meter', 'notes', 'chroma', 'phase', 'analog-meter', 'rhythm-analyzer'];
+// Analyzer graphics (ticks, lines, labels, peak marks) are drawn in these 1280-wide units,
+// so the same geometry looks identical regardless of the output canvas size or window scale.
+export const REFERENCE_WIDTH = 1280;
+export const GRADIENT_DIRECTION_TYPES = ['spectrum', 'spectrogram', 'notes', 'chroma', 'phase'];
 export const META_TYPES = ['artwork', 'title', 'album', 'artist'];
+export const TEXT_STYLE_TYPES = ['title', 'album', 'artist', 'rhythm-analyzer'];
 export const ITEM_TYPES = [...VISUAL_TYPES, ...META_TYPES];
 export const MAX_ITEMS = 64;
 export const MAX_EFFECTS = 16;
+// Rhythm Analyzer Span (beats) choices, same as the effect.
+export const RHYTHM_SPANS = Object.freeze([4, 6, 8, 12, 16]);
 export const FONT_FAMILIES = Object.freeze([
     ['sans-serif', 'Sans-serif'], ['serif', 'Serif'], ['monospace', 'Monospace'],
     ['system-ui', 'System UI'], ['Arial, Helvetica, sans-serif', 'Arial'],
@@ -19,7 +28,7 @@ export const THEME_COLOR_ROLES = Object.freeze([
     'graph-bg-deep', 'graph-base-soft', 'graph-grid-subtle', 'graph-grid-soft', 'graph-grid-strong',
     'graph-label', 'text-primary', 'graph-trace-tertiary'
 ]);
-// Graphite defaults from effetune-theme.css; the soft grid retains its 20% alpha.
+// Graphite defaults from css/effetune-theme.css; the soft grid retains its 20% alpha.
 export const DEFAULT_THEME_COLORS = Object.freeze({
     'graph-bg-deep': '#000000', 'graph-base-soft': '#232323', // theme-allow: Fixed Visualizer Graphite defaults.
     'graph-grid-subtle': '#323233', 'graph-grid-soft': '#f6f8fb33', // theme-allow: Fixed Visualizer Graphite defaults.
@@ -39,14 +48,15 @@ export const EFFECT_CATALOG = Object.freeze({
     'trail-feedback': { label: 'Trail Feedback', defaultAmount: 0.4, allowedOn: ['item'] },
     particles: { label: 'Particles', defaultAmount: 0.5, allowedOn: ['item'] },
     'ken-burns': { label: 'Ken Burns', defaultAmount: 0.4, allowedOn: ['item', 'background'] },
-    flash: { label: 'Flash', defaultAmount: 0.5, allowedOn: ['background'] }
+    flash: { label: 'Flash', defaultAmount: 0.5, allowedOn: ['background'] },
+    backplate: { label: 'Backplate', defaultAmount: 1, allowedOn: ['item'] }
 });
 
 const CHANNELS = new Set([null, 'L', 'R', ...Array.from({ length: 7 }, (_, i) => `${2 * i + 3}${2 * i + 4}`),
     ...Array.from({ length: 16 }, (_, i) => `${i + 1}`)]);
 const MOD_SOURCES = ['none', 'time', 'level', 'bass'];
 const DEFAULT_PALETTE = { stops: [{ pos: 0, color: '#40dfff' }], motion: { mode: 'none', speed: 0.25 } }; // theme-allow: Editable scene palette default.
-const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+export const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const choice = (value, choices, fallback) => choices.includes(value) ? value : fallback;
 const number = (value, fallback, min, max) => Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
 const color = (value, fallback) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
@@ -79,6 +89,16 @@ export function normalizeEffect(value, target = 'item') {
             ? { flowY: number(value.flowY, 0, -1, 1) } : {}),
         ...(value.type === 'trail-feedback' && Object.hasOwn(value, 'zoom')
             ? { zoom: number(value.zoom, 2, -2, 2) } : {}),
+        // Border width and corner radius use the same 1280-pixel-wide units as text sizes.
+        ...(value.type === 'backplate' ? {
+            fill: color(value.fill, '#000000'), // theme-allow: Editable backplate fill default.
+            fillOpacity: Math.round(number(value.fillOpacity, 0.5, 0, 1) * 100) / 100,
+            border: color(value.border, '#ffffff'), // theme-allow: Editable backplate border default.
+            borderWidth: Math.round(number(value.borderWidth, 0, 0, 20) * 2) / 2,
+            radius: Math.round(number(value.radius, 16, 0, 200)),
+            // Positive margins extend the plate beyond the item; negative ones shrink it inside.
+            margin: Math.round(number(value.margin, 0, -200, 200))
+        } : {}),
         palette: normalizePalette(value.palette),
         mod: {
             source: choice(value.mod?.source, MOD_SOURCES, 'none'),
@@ -93,14 +113,50 @@ function normalizeEffects(values, target) {
         .map(value => normalizeEffect(value, target)).filter(Boolean);
 }
 
+// Text decorations are optional keys so layouts saved without them stay valid; absent keys
+// use TEXT_DECORATION_DEFAULTS. Lengths use the same 1280-pixel-wide units as fontSize.
+const TEXT_DECORATION_RULES = {
+    verticalAlign: value => choice(value, ['top', 'middle', 'bottom'], 'middle'),
+    textCase: value => choice(value, ['none', 'upper', 'lower'], 'none'),
+    letterSpacing: value => Math.round(number(value, 0, -20, 100)),
+    outlineWidth: value => Math.round(number(value, 0, 0, 20) * 2) / 2,
+    outlineColor: value => color(value, '#000000'), // theme-allow: Editable text outline default.
+    shadowColor: value => color(value, '#000000'), // theme-allow: Editable text shadow default.
+    shadowOpacity: value => Math.round(number(value, 0.6, 0, 1) * 100) / 100,
+    shadowBlur: value => Math.round(number(value, 0, 0, 50)),
+    shadowX: value => Math.round(number(value, 0, -50, 50)),
+    shadowY: value => Math.round(number(value, 0, -50, 50))
+};
+export const TEXT_DECORATION_DEFAULTS = Object.freeze(Object.fromEntries(
+    Object.entries(TEXT_DECORATION_RULES).map(([key, rule]) => [key, rule(undefined)])));
+
+const RHYTHM_BEAT_STYLE_RULES = {
+    beatSize: value => Math.round(number(value, 90, 10, 100)),
+    beatLineWidth: value => Math.round(number(value, 2, 0, 20) * 2) / 2,
+    beatFillOpacity: value => Math.round(number(value, 0.3, 0, 1) * 100) / 100,
+    beatHoldTime: value => Math.round(number(value, 0, 0, 1000) / 10) * 10,
+    beatDecayTime: value => Math.round(number(value, 90, 10, 2000) / 10) * 10,
+    beatStrokeOpacity: value => Math.round(number(value, 1, 0, 1) * 100) / 100,
+    beatUsePalette: value => value !== false,
+    beatFillColor: value => color(value, '#40dfff'), // theme-allow: Editable beat fill default.
+    beatStrokeColor: value => color(value, '#40dfff'), // theme-allow: Editable beat border default.
+    beatFitBpm: value => value !== false
+};
+export const RHYTHM_BEAT_STYLE_DEFAULTS = Object.freeze(Object.fromEntries(
+    Object.entries(RHYTHM_BEAT_STYLE_RULES).map(([key, rule]) => [key, rule(undefined)])));
+
 function normalizeStyle(type, input) {
     const style = isRecord(input) ? input : {};
-    if (['title', 'album', 'artist'].includes(type)) return {
-        fontSize: number(style.fontSize, 36, 8, 200),
+    if (TEXT_STYLE_TYPES.includes(type)) return {
+        fontSize: number(style.fontSize, type === 'rhythm-analyzer' ? 96 : 36, 8, 200),
         fontFamily: choice(style.fontFamily, FONT_FAMILIES.map(([family]) => family), 'sans-serif'),
         bold: style.bold === true,
         italic: style.italic === true,
-        align: choice(style.align, ['left', 'center', 'right'], 'left')
+        align: choice(style.align, ['left', 'center', 'right'], type === 'rhythm-analyzer' ? 'center' : 'left'),
+        ...(type === 'rhythm-analyzer' ? { outlineWidth: 2,
+            ...Object.fromEntries(Object.entries(RHYTHM_BEAT_STYLE_RULES).map(([key, rule]) => [key, rule(style[key])])) } : {}),
+        ...Object.fromEntries(Object.entries(TEXT_DECORATION_RULES)
+            .filter(([key]) => Object.hasOwn(style, key)).map(([key, rule]) => [key, rule(style[key])]))
     };
     if (type === 'artwork') return { rounded: style.rounded === true };
     return {};
@@ -117,19 +173,35 @@ export function normalizeParams(type, input) {
         pt: Math.round(number(params.pt, 12, 8, 14)),
         sc: choice(params.sc, ['log', 'log-hq', 'linear'], 'log-hq'),
         kb: params.kb === true,
+        kl: Math.round(number(params.kl, 100, 50, 200)),
+        // Top of the frequency axis in Hz; the bottom stays at 20 Hz.
+        mf: Math.round(number(params.mf, 40000, 1000, 40000) / 1000) * 1000,
         ...(type === 'spectrum' ? {
             dm: choice(params.dm, ['line', 'bar'], 'line'),
             quantizeBars: params.quantizeBars !== false,
-            orientation: choice(params.orientation, ['horizontal', 'vertical'], 'horizontal')
+            // Bar mode: band count and dB per segment (0 = continuous bars).
+            bc: Math.round(number(params.bc, 48, 8, 128)),
+            ds: Math.round(number(params.ds, 1, 0, 12) * 2) / 2,
+            orientation: choice(params.orientation, ['horizontal', 'vertical'], 'horizontal'),
+            // Fall times are "seconds to fall 20 dB" (0 = instant); pk is the current/peak-hold
+            // display toggle, and ph/pf only matter while it is on.
+            cf: Math.round(number(params.cf, 0, 0, 5) * 20) / 20,
+            pk: params.pk !== false,
+            ph: Math.round(number(params.ph, 0, 0, 10) * 10) / 10,
+            pf: Math.round(number(params.pf, 1, 0.1, 10) * 10) / 10,
+            sm: Math.round(number(params.sm, 0, 0, 1) * 100) / 100
         } : {}),
         gainDb: Math.round(number(params.gainDb, 0, -24, 24)), ...axes
     };
     if (type === 'stereo') return { wt: Math.round(number(params.wt, 0.1, 0.01, 1) * 1000) / 1000,
-        gainDb: Math.round(number(params.gainDb, 0, -24, 24)),
+        gainDb: Math.round(number(params.gainDb, 0, -24, 24)), pk: params.pk !== false,
+        // The DSP envelope already falls 20 dB/s, so slower peak falls are the only ones possible.
+        ph: Math.round(number(params.ph, 0, 0, 10) * 10) / 10,
+        pf: Math.round(number(params.pf, 1, 1, 10) * 10) / 10,
         showCorrelation: params.showCorrelation !== false, showBalance: params.showBalance !== false, ...axes };
     if (type === 'oscilloscope') return {
         dt: Math.round(number(params.dt, 0.01, 0.001, 0.1) * 1000) / 1000,
-        tm: choice(params.tm, ['Auto', 'Normal'], 'Auto'),
+        tm: choice(params.tm, ['Auto', 'Normal', 'Off'], 'Auto'),
         tl: Math.round(number(params.tl, 0, -1, 1) * 100) / 100,
         te: choice(params.te, ['Rising', 'Falling'], 'Rising'),
         ho: Math.round(number(params.ho, 0.0001, 0.0001, 0.01) * 10000) / 10000,
@@ -139,7 +211,14 @@ export function normalizeParams(type, input) {
     if (type === 'level-meter') return {
         dr: Math.round(number(params.dr, -96, -144, -48)),
         orientation: choice(params.orientation, ['horizontal', 'vertical'], 'horizontal'),
-        showLevelValues: params.showLevelValues === true, ...axes
+        showLevelValues: params.showLevelValues === true,
+        // dB per segment; 0 draws continuous bars.
+        ds: Math.round(number(params.ds, 0, 0, 12) * 2) / 2,
+        // Defaults match today's fixed ballistics (FALL_RATE = 20 <=> cf = 1.0, etc.).
+        cf: Math.round(number(params.cf, 1, 0, 5) * 20) / 20,
+        pk: params.pk !== false,
+        ph: Math.round(number(params.ph, 1, 0, 10) * 10) / 10,
+        pf: Math.round(number(params.pf, 1, 0.1, 10) * 10) / 10, ...axes
     };
     if (type === 'notes') {
         const mn = Math.round(number(params.mn, 28, 21, 108));
@@ -147,6 +226,7 @@ export function normalizeParams(type, input) {
             pr: choice(params.pr, ['Semitone', 'High'], 'Semitone'),
             ly: choice(params.ly, ['Horizontal', 'Vertical'], 'Horizontal'),
             kb: params.kb === true,
+            kl: Math.round(number(params.kl, 100, 50, 200)),
             vl: params.vl !== false,
             ts: Math.round(number(params.ts, 2, 1, 10)),
             mn, mx: Math.max(mn, Math.round(number(params.mx, 91, 21, 108))),
@@ -160,7 +240,50 @@ export function normalizeParams(type, input) {
             hi: Math.max(lo, Math.round(number(params.hi, 7, 1, 9))),
             ft: Math.round(number(params.ft, 3, -6, 6) * 2) / 2,
             lr: Math.round(number(params.lr, 24, 6, 96)),
-            df: Math.round(number(params.df, -60, -120, -24)), ...axes
+            df: Math.round(number(params.df, -60, -120, -24)),
+            cf: Math.round(number(params.cf, 0, 0, 5) * 20) / 20, ...axes
+        };
+    }
+    if (type === 'phase') return {
+        ax: choice(params.ax, ['phase', 'balance'], 'phase'),
+        dr: Math.round(number(params.dr, -72, -96, -24) / 6) * 6,
+        ml: Math.round(number(params.ml, -40, -120, -24)),
+        pe: Math.round(number(params.pe, 0.5, 0.1, 2) * 10) / 10, ...axes
+    };
+    // Same keys, ranges, and steps as the Analog Meter effect. A needle cannot be read
+    // without its dial, so this type alone shows axes and numbers by default.
+    if (type === 'analog-meter') return {
+        md: choice(params.md, ['VU', 'PPM', 'RMS', 'Sample Peak', 'True Peak', 'Loudness'], 'VU'),
+        it: Math.round(number(params.it, 0.3, 0.05, 3) * 100) / 100,
+        at: Math.round(number(params.at, 5, 1, 20) * 10) / 10,
+        rt: Math.round(number(params.rt, 1.5, 0.1, 5) * 100) / 100,
+        rl: Math.round(number(params.rl, -14, -30, 0)),
+        rg: Math.round(number(params.rg, 40, 20, 60)),
+        sc: choice(params.sc, [0, 1, 2], 0),
+        ph: Math.round(number(params.ph, 1, 0, 10) * 10) / 10,
+        ln: choice(params.ln, [0, 1], 0),
+        tg: Math.round(number(params.tg, -23, -36, -10)),
+        ls: choice(params.ls, [0, 1], 0),
+        showAxes: params.showAxes !== false,
+        showAxisNumbers: params.showAxisNumbers !== false
+    };
+    // Rhythm analysis controls match the effect. Axes and their labels start on;
+    // the beat circle and BPM have independent visibility controls.
+    if (type === 'rhythm-analyzer') {
+        const mn = Math.round(number(params.mn, 40, 40, 192));
+        return {
+            // Max BPM >= 1.25 x Min BPM keeps the tempo search range non-degenerate (same rule as the effect).
+            mn, mx: Math.max(Math.ceil(mn * 1.25), Math.round(number(params.mx, 240, 50, 240))),
+            sp: choice(params.sp, RHYTHM_SPANS, 8),
+            showBeat: params.showBeat !== false,
+            showBpm: params.showBpm !== false,
+            // Panel toggles: tempogram strip, main lanes, echo rows, beat lens. All shown by default.
+            vt: params.vt !== false,
+            vm: params.vm !== false,
+            ve: params.ve !== false,
+            vl: params.vl !== false,
+            showAxes: params.showAxes !== false,
+            showAxisNumbers: params.showAxisNumbers !== false
         };
     }
     return {};
@@ -170,7 +293,7 @@ export function paletteModesForType(type) {
     if (type === 'artwork') return [];
     const modes = ['solid', 'gradient'];
     if (['spectrum', 'notes', 'chroma'].includes(type)) modes.push('note-colors');
-    if (['spectrum', 'spectrogram', 'chroma', 'level-meter'].includes(type)) modes.push('heatmap');
+    if (['spectrum', 'spectrogram', 'chroma', 'level-meter', 'phase'].includes(type)) modes.push('heatmap');
     return modes;
 }
 
@@ -182,6 +305,9 @@ function itemPalette(type, value) {
         palette.color = color(value?.color, '#40dfff'); // theme-allow: Editable scene palette fallback.
     }
     if (octave) palette.mapping = choice(value?.mapping, ['range', 'octave'], 'range');
+    // Omitted direction preserves existing presets and share links as frequency gradients.
+    if (GRADIENT_DIRECTION_TYPES.includes(type) && value?.direction !== undefined)
+        palette.direction = choice(value.direction, ['frequency', 'intensity'], 'frequency');
     return palette;
 }
 
@@ -195,7 +321,7 @@ export function createItem(type, id = globalThis.crypto?.randomUUID?.() || `item
 
 export function createDefaultLayout() {
     return {
-        aspect: '16:9', background: { color: '#080d1c', image: null, effects: [] }, // theme-allow: Editable scene background default.
+        aspect: '16:9', graphScale: 1, background: { color: '#080d1c', image: null, effects: [] }, // theme-allow: Editable scene background default.
         items: [createItem('spectrum', 'main-spectrum')]
     };
 }
@@ -227,6 +353,7 @@ export function normalizeLayout(value) {
     });
     return {
         aspect: choice(input.aspect, ASPECTS, '16:9'),
+        graphScale: Math.round(number(input.graphScale, 1, 0.5, 3) * 20) / 20,
         background: {
             color: color(background.color, '#080d1c'), // theme-allow: Editable scene background fallback.
             image: typeof background.image === 'string' && /^data:image\/(?:png|jpeg|webp);base64,/i.test(background.image)
@@ -251,7 +378,27 @@ export function validateLayout(value) {
             Object.keys(a).every(key => Object.hasOwn(b, key) && same(a[key], b[key]));
         return a === b;
     };
-    return same(value, normalizeLayout(value));
+    // Only fields added with defaults may be absent in older saved layouts. Supplied
+    // values and every original field must still match strict normalization.
+    const addedParams = {
+        spectrum: ['kl', 'cf', 'pk', 'ph', 'pf', 'sm', 'bc', 'ds', 'mf'], spectrogram: ['kl', 'mf'], notes: ['kl'],
+        stereo: ['pk', 'ph', 'pf'], 'level-meter': ['cf', 'pk', 'ph', 'pf', 'ds'], chroma: ['cf'],
+        'rhythm-analyzer': ['showBeat', 'showBpm']
+    };
+    const comparable = {
+        ...value,
+        graphScale: Object.hasOwn(value, 'graphScale') ? value.graphScale : 1,
+        items: value.items.map(item => {
+            if (!isRecord(item) || !isRecord(item.params) || !Object.hasOwn(addedParams, item.type)) return item;
+            const params = { ...item.params }, defaults = normalizeParams(item.type);
+            for (const key of addedParams[item.type]) if (!Object.hasOwn(params, key)) params[key] = defaults[key];
+            // Rhythm layouts saved before BPM text styling have an empty style.
+            const style = item.type === 'rhythm-analyzer' && isRecord(item.style)
+                ? { ...normalizeStyle(item.type), ...item.style } : item.style;
+            return { ...item, params, style };
+        })
+    };
+    return same(comparable, normalizeLayout(value));
 }
 
 export function layoutsEqual(a, b) {
@@ -262,4 +409,32 @@ export function snapshotLayout(value) {
     const layout = normalizeLayout(value);
     layout.background.themeColors = { ...DEFAULT_THEME_COLORS, ...layout.background.themeColors };
     return layout;
+}
+
+// Share links omit the background image because data URIs are too large for a URL.
+export function encodeLayoutShare(layout) {
+    const snapshot = snapshotLayout(layout);
+    snapshot.background.image = null;
+    return encodePipelineState(snapshot);
+}
+
+export function decodeLayoutShare(encoded) {
+    try {
+        const layout = decodePipelineState(encoded);
+        if (validateLayout(layout)) return layout;
+        console.warn('Visualizer share link contains an invalid layout.');
+    } catch (error) {
+        console.warn('Visualizer share link could not be decoded:', error);
+    }
+    return null;
+}
+
+// Only EffeTune share links (see createShareUrl) carry a layout; other sites may use `v` too.
+export function layoutShareParam(text) {
+    try {
+        const url = new URL(String(text).trim());
+        return url.pathname.endsWith('/effetune.html') ? url.searchParams.get('v') : null;
+    } catch {
+        return null;
+    }
 }

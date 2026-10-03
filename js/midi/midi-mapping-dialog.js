@@ -1,3 +1,5 @@
+import { LIBRARY_STYLESHEET } from '../utils/app-stylesheets.js';
+import { APP_TARGETS } from './app-targets.js';
 import {
   defaultAutomationAmount,
   defaultMapRange,
@@ -117,7 +119,7 @@ export class MidiMappingDialog {
 
   async open() {
     if (this.overlay) return this.overlay;
-    loadStylesheet('effetune-library.css', { documentRef: this.document });
+    loadStylesheet(LIBRARY_STYLESHEET, { documentRef: this.document });
     await this.manager.setDialogOpen(true);
     this.overlay = createElement(this.document, 'div', 'library-dialog-backdrop');
     const dialog = createElement(
@@ -636,13 +638,8 @@ export class MidiMappingDialog {
 
   populateParameterSelect(select, type, current, { numericOnly = false } = {}) {
     if (type === '_global') {
-      for (const param of ['masterBypass', 'abToggle']) {
-        const option = createElement(
-          this.document,
-          'option',
-          '',
-          this.t(`midi.target.${param}`, param === 'masterBypass' ? 'Master Bypass' : 'A/B Toggle')
-        );
+      for (const param of Object.keys(APP_TARGETS)) {
+        const option = createElement(this.document, 'option', '', this.t(`midi.target.${param}`, param));
         option.value = `${param}:0`;
         select.appendChild(option);
       }
@@ -678,7 +675,8 @@ export class MidiMappingDialog {
     const numericTarget = isNumericTargetRange(range);
     const virtualSource = VIRTUAL_SOURCE_KINDS.has(mapping.source.kind);
     if (virtualSource) this.appendAutomationSourceControls(details, mapping);
-    const resolved = mapping.target?.type === '_global' || mapping.target?.param === '_enabled'
+    const appTarget = mapping.target?.type === '_global' ? APP_TARGETS[mapping.target.param] : null;
+    const resolved = mapping.target?.param === '_enabled'
       ? null
       : this.manager.adapter.resolve(mapping.target.type, mapping.target.param, mapping.target.element);
     const unit = resolved?.descriptor.unit ? ` (${resolved.descriptor.unit})` : '';
@@ -747,7 +745,9 @@ export class MidiMappingDialog {
     const discreteNumeric = numericTarget &&
       (mapping.source.kind === 'timer' || BUTTON_SOURCE_KINDS.has(mapping.source.kind));
     if (discreteNumeric) this.appendBehaviorControls(details, mapping, range);
-    if (!virtualSource || (mapping.source.kind === 'timer' && mapping.map.behavior === 'direct')) {
+    const unsignedAction = appTarget?.kind === 'action' && !appTarget.signed;
+    if (!unsignedAction &&
+      (!virtualSource || (mapping.source.kind === 'timer' && mapping.map.behavior === 'direct'))) {
       const direction = this.createSelect();
       for (const [value, key, fallback] of [
         ['1', 'midi.direction.increase', 'Increase (+)'],

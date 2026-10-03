@@ -1,4 +1,5 @@
 import { AudioContextManager } from './audio/audio-context-manager.js';
+import { audioManagerWasmAssetMethods, DSP_BYTES_READY_TIMEOUT_MS } from './audio/audio-manager-wasm-assets.js';
 import {
     AudioIOManager,
     MIC_DENIED_PREFIX
@@ -7,6 +8,7 @@ import { PipelineProcessor } from './audio/pipeline-processor.js';
 import { AudioEncoder } from './audio/audio-encoder.js';
 import { EventManager } from './audio/event-manager.js';
 import { loadDspModule } from './audio/dsp-wasm-loader.js';
+import { warmUpDspModule } from './audio/dsp-module-warmup.js';
 import { getDspRolloutConfig, SHIPPED_ENABLED_TYPES } from './audio/dsp-rollout.js';
 import {
     attachPluginExecutionCapabilities,
@@ -14,7 +16,7 @@ import {
 } from './audio/plugin-execution-capabilities.js';
 import { TelemetryHub } from './audio/telemetry-hub.js';
 import { DSP_PARAM_PACKERS } from './audio/dsp-params.generated.js';
-import { VISUAL_SYNC_RULES, VISUAL_SYNC_MAX_OUTPUT_DELAY_SECONDS, VISUAL_SYNC_QUEUE_LIMIT,
+import { VISUAL_SYNC_RULES, VISUAL_SYNC_MAX_OUTPUT_DELAY_SECONDS, dropVisualSyncOverflow,
     isVisualSyncEnabled, requiredOutputDelayFrames, audibleFrameTime, audibleContextTime, telemetryCaptureTiming } from './audio/visual-sync.js';
 import { PowerPolicyController } from './audio/power-policy-controller.js';
 import { PowerDiagnostics } from './audio/power-diagnostics.js';
@@ -37,11 +39,16 @@ import { NO_AUDIO_INPUT_DEVICE_ID } from './audio/audio-device-constants.js';
 import { getSerializablePluginStateShort, applySerializedState } from './utils/serialization-utils.js';
 
 const PIPELINE_SWITCH_FADE_SECONDS = 0.04;
-const PIPELINE_SWITCH_SILENCE_SECONDS = 0.05;
-const DSP_STARTUP_WAIT_TIMEOUT_MS = 1000;
 const DSP_MODULE_READY_TIMEOUT_MS = 1000;
-const DSP_BYTES_READY_TIMEOUT_MS = 3000;
+// Covers the worklet's 3 s asset hold plus the commit, plan settling and ramps.
+const OUTPUT_READY_TIMEOUT_MS = 5000;
+// Startup output stays muted until WASM activation settles, so a normal
+// activation never swaps the audible pipeline from JavaScript to WASM. The
+// cap only bounds a stalled load; the JavaScript path then takes over.
+const DSP_STARTUP_WAIT_TIMEOUT_MS = OUTPUT_READY_TIMEOUT_MS;
 const JS_FALLBACK_SAMPLE_CHANNEL_BUDGET = 96000;
+// Visualizer sources capture the final output, so every rule tap has zero offset.
+const VISUALIZER_SOURCE_TAP = Object.freeze({ input: 0, output: 0 });
 const DSP_EXECUTION_BYPASS_REASONS = new Set([
     'unsupportedSampleRate',
     'unsupportedChannelMode',
@@ -207,9 +214,10 @@ export class AudioManager {
         this._activeResetPrefs = null;
         this._hasPendingReset = false;
         this._pendingResetPrefs = null;
+        this._systemResumeRecoveryPending = false;
+        this._systemResumeRecoveryPromise = null;
         this.isCancelled = false;
         this._skipAudioInitDuringSampleRateChange = false;
-        this._pipelineSwitchSeq = 0;
         this.powerDiagnostics = new PowerDiagnostics();
         this.powerPolicyController = new PowerPolicyController(this, {
             settings: window.appConfig?.powerSaving,
@@ -246,19 +254,21 @@ export class AudioManager {
      * Set current pipeline (A or B)
      * @param {string} pipeline - 'A' or 'B'
      * @param {boolean} skipHistorySave - Skip saving to history (for internal operations)
+     * @param {Object} [options]
+     * @param {boolean} [options.gate] - Ask the worklet to crossfade the membership change
      */
-    setCurrentPipeline(pipeline, skipHistorySave = false) {
+    setCurrentPipeline(pipeline, skipHistorySave = false, { gate = false } = {}) {
         if (pipeline !== 'A' && pipeline !== 'B') {
             throw new Error('Pipeline must be "A" or "B"');
         }
-        
+
         this.currentPipeline = pipeline;
         this.pipeline = this.getCurrentPipeline();
         this._configureOwnedPipelineWasmAssetResolvers();
-        
+
         // Rebuild audio pipeline if worklet is initialized
         if (this.workletNode) {
-            this.rebuildPipeline();
+            this.rebuildPipeline(false, { gate });
         }
         
         // Dispatch event for UI updates
@@ -287,11 +297,10 @@ export class AudioManager {
     }
 
     /**
-     * Switch between pipeline A and B with an output dip for user-triggered A/B switching.
-     * If B doesn't exist, copy A to B first.
-     * @returns {Promise<boolean>} Whether the transition completed
+     * Switch between pipeline A and B with a worklet-gated crossfade for
+     * user-triggered A/B switching. If B doesn't exist, copy A to B first.
      */
-    async togglePipelineWithTransition() {
+    togglePipelineWithTransition() {
         if (this.currentPipeline === 'A') {
             if (this.pipelineB === null) {
                 // Copy A to B if B doesn't exist
@@ -303,77 +312,15 @@ export class AudioManager {
     }
 
     /**
-     * Set current pipeline after fade-out, keep a short silent interval, then fade in.
-     * This is for user-facing A/B switches; internal restore paths should use setCurrentPipeline().
+     * Set current pipeline for user-facing A/B switches. The worklet crossfades
+     * the membership change through its output gate; internal restore paths
+     * should use setCurrentPipeline().
      * @param {string} pipeline - 'A' or 'B'
      * @param {boolean} skipHistorySave - Skip saving to history (for internal operations)
-     * @param {Object} options - Optional fade/silence durations in seconds
-     * @returns {Promise<boolean>} Whether the transition completed
      */
-    async setCurrentPipelineWithTransition(pipeline, skipHistorySave = false, options = {}) {
-        if (pipeline !== 'A' && pipeline !== 'B') {
-            throw new Error('Pipeline must be "A" or "B"');
-        }
-
-        if (pipeline === this.currentPipeline) {
-            return true;
-        }
-
-        const gainNode = this.ioManager?.outputGainNode;
-        const ctx = this.contextManager?.audioContext;
-        if (!gainNode || !ctx) {
-            this.setCurrentPipeline(pipeline, skipHistorySave);
-            return true;
-        }
-
-        const fadeDuration = typeof options.fadeDuration === 'number'
-            ? options.fadeDuration
-            : PIPELINE_SWITCH_FADE_SECONDS;
-        const silenceDuration = typeof options.silenceDuration === 'number'
-            ? options.silenceDuration
-            : PIPELINE_SWITCH_SILENCE_SECONDS;
-        const seq = ++this._pipelineSwitchSeq;
-        let outputOwner = this._captureOutputOwner();
-        const isCurrent = () => seq === this._pipelineSwitchSeq &&
-            this._isOutputOwnerCurrent(outputOwner);
-
-        try {
-            this.fadeOutOutput(fadeDuration);
-            outputOwner = this._captureOutputOwner();
-            await waitForPipelineSwitch(fadeDuration);
-            if (!isCurrent()) return false;
-
-            this.currentPipeline = pipeline;
-            this.pipeline = this.getCurrentPipeline();
-            this._configureOwnedPipelineWasmAssetResolvers();
-
-            if (this.workletNode) {
-                const result = await this.rebuildPipeline();
-                if (!isCurrent()) return false;
-                if (result) {
-                    console.warn('[AudioManager] Pipeline switch rebuild reported:', result);
-                }
-            }
-
-            this.dispatchEvent('pipelineChanged', { pipeline: this.currentPipeline });
-            if (!isCurrent()) return false;
-
-            if (!skipHistorySave && this.pipelineManager && this.pipelineManager.historyManager) {
-                this.pipelineManager.historyManager.saveState();
-            }
-
-            await waitForPipelineSwitch(silenceDuration);
-            if (!isCurrent()) return false;
-
-            this._fadeInOutputIfOwned(outputOwner, fadeDuration);
-            return true;
-        } catch (error) {
-            if (!isCurrent()) return false;
-            console.warn('[AudioManager] setCurrentPipelineWithTransition failed, falling back to immediate switch:', error);
-            this.setCurrentPipeline(pipeline, skipHistorySave);
-            this._fadeInOutputIfOwned(outputOwner, fadeDuration);
-            return false;
-        }
+    setCurrentPipelineWithTransition(pipeline, skipHistorySave = false) {
+        if (pipeline === this.currentPipeline) return;
+        this.setCurrentPipeline(pipeline, skipHistorySave, { gate: true });
     }
 
     /**
@@ -581,6 +528,7 @@ export class AudioManager {
     }
 
     async closeCapturedStream({ releaseInput = true } = {}) {
+        await this.fadeOutOutputForTeardown();
         this._clearSyncedMeasurements();
         this.telemetryHub?.setVisualSyncResolver?.(null);
         if (this._visualSyncUpdateTimer != null) clearTimeout(this._visualSyncUpdateTimer);
@@ -660,10 +608,7 @@ export class AudioManager {
                 primaryWorklet: workletNode,
                 primaryEpoch: workletEpoch,
                 loadPromise: dspModulePromise,
-                startupFailureLabel: 'Worklet startup failed',
-                // App and _doReset keep the new output gain at zero until this
-                // request settles.
-                muteOutput: false
+                startupFailureLabel: 'Worklet startup failed'
             });
             
             return '';
@@ -678,7 +623,10 @@ export class AudioManager {
         const preference = window.audioPreferences || window.electronIntegration?.audioPreferences || {};
         const rollout = getDspRolloutConfig({ preference, location: window.location });
         if (rollout.forceOff || preference.useWasmDsp === false) return null;
-        return loadDspModule({ basePath });
+        const sampleRate = this.contextManager.audioContext.sampleRate;
+        const info = await loadDspModule({ basePath });
+        if (!info) return null;
+        return warmUpDspModule(info, sampleRate);
     }
 
     getEnabledDspTypes(preferenceOverride = null) {
@@ -696,6 +644,11 @@ export class AudioManager {
 
     _getPrimaryWorkletNode() {
         return this.contextManager?.workletNode || this.workletNode || null;
+    }
+
+    isDspReady() {
+        const node = this._getPrimaryWorkletNode();
+        return !!node && this._dspCapabilitiesByNode.has(node);
     }
 
     _resetDspExecutionStateSnapshot() {
@@ -795,7 +748,6 @@ export class AudioManager {
             id: ++this._dspModuleLoadRequestSequence,
             primaryWorklet,
             primaryEpoch,
-            muteOutput: options.muteOutput !== false,
             startupWaitReleased: false,
             settled: false,
             promise: null
@@ -815,9 +767,7 @@ export class AudioManager {
                 if (workletNodes.length === 0) return false;
                 const targetTypes = this.getEnabledDspTypes();
                 const results = await Promise.all(workletNodes.map(workletNode => {
-                    const activation = this._reinitializeDspWorklet(workletNode, targetTypes, {
-                        muteOutput: request.muteOutput
-                    });
+                    const activation = this._reinitializeDspWorklet(workletNode, targetTypes);
                     const activationRequest = this._pendingDspActivationRequests.get(workletNode);
                     if (activationRequest) activationRequest.loadRequest = request;
                     return activation;
@@ -868,22 +818,19 @@ export class AudioManager {
         if (outcome.settled) return outcome.result === true;
         if (!this._isDspModuleLoadRequestCurrent(request)) return false;
 
-        // Startup may now publish the JavaScript path. Any later WASM
-        // activation must therefore use the normal protected output fade.
+        // Startup may now publish the JavaScript path. A later WASM activation
+        // is crossfaded by the worklet output gate.
         request.startupWaitReleased = true;
-        request.muteOutput = true;
         const acknowledgedWorklets = [];
         for (const [workletNode, activationRequest] of this._pendingDspActivationRequests) {
-            if (activationRequest.loadRequest === request) {
-                activationRequest.muteOutput = true;
-                if (this._dspReadyFallbacks.get(workletNode)?.acknowledged) {
-                    acknowledgedWorklets.push(workletNode);
-                }
+            if (activationRequest.loadRequest === request &&
+                this._dspReadyFallbacks.get(workletNode)?.acknowledged) {
+                acknowledgedWorklets.push(workletNode);
             }
         }
         // Once the worklet has acknowledged that initialization is running,
         // release only the startup waiter. A later dspReady remains valid and
-        // publishes WASM through the normal protected transition.
+        // publishes WASM through the normal transition.
         for (const workletNode of acknowledgedWorklets) {
             this._releaseDspActivationWait(workletNode);
         }
@@ -952,7 +899,7 @@ export class AudioManager {
     _reinitializeDspWorklet(
         workletNode,
         targetTypes,
-        { muteOutput = true, beforeUnmute = null } = {}
+        { beforeUnmute = null } = {}
     ) {
         if (!workletNode?.port || !this.dspModuleInfo) return Promise.resolve(false);
         this._completeDspActivationRequest(workletNode, false);
@@ -966,7 +913,6 @@ export class AudioManager {
         const request = {
             token: this._dspReadyTokens.get(workletNode),
             targetTypes: [...targetTypes],
-            muteOutput,
             beforeUnmute,
             loadRequest: null,
             timer: null,
@@ -1360,23 +1306,24 @@ export class AudioManager {
         const previous = this._dspReadyTransitionPromise && this._dspTransitionGeneration === generation
             ? this._dspReadyTransitionPromise
             : null;
+        // Only graph rewiring (parallel barrier and teardown, which carry
+        // beforeUnmute) needs the main-thread fade. Single-node backend changes
+        // are crossfaded by the worklet output gate. muteOutput: false leaves
+        // output ownership to a caller that is tearing the graph down.
+        const useOutputTransition = typeof beforeUnmute === 'function' && muteOutput !== false &&
+            !!(snapshot.context && snapshot.outputGainNode);
         let transitionPromise;
         const execute = async () => {
             if (previous) {
                 await previous;
                 if (!this._isDspTransitionSnapshotCurrent(snapshot)) return false;
-            } else if (!muteOutput) {
+            } else if (!useOutputTransition) {
                 // Defer publication by one microtask so a synchronous fatal-DSP
                 // notification or graph replacement can invalidate this candidate.
                 await Promise.resolve();
             }
             if (!this._isDspTransitionSnapshotCurrent(snapshot)) return false;
 
-            // Startup can publish a prepared backend while the output is still
-            // private. Runtime backend changes retain the bounded mute because
-            // JS and WASM do not share stateful plugin memory.
-            const useOutputTransition = muteOutput === true &&
-                !!(snapshot.context && snapshot.outputGainNode);
             let faded = false;
             let fadeToken = null;
             let safeToUnmute = typeof beforeUnmute !== 'function';
@@ -1391,10 +1338,6 @@ export class AudioManager {
                 const applied = await apply(snapshot);
                 if (!this._isDspTransitionSnapshotCurrent(snapshot) || applied === false) return false;
 
-                if (useOutputTransition) {
-                    await this._waitForDspTransition(PIPELINE_SWITCH_SILENCE_SECONDS);
-                    if (!this._isDspTransitionSnapshotCurrent(snapshot)) return false;
-                }
                 if (typeof beforeUnmute === 'function') {
                     const valid = await beforeUnmute(snapshot);
                     if (!this._isDspTransitionSnapshotCurrent(snapshot) || valid === false) {
@@ -1806,10 +1749,7 @@ export class AudioManager {
                 return true;
             },
             this._audioGraphGeneration,
-            {
-                muteOutput: options.muteOutput !== false,
-                beforeUnmute: options.beforeUnmute
-            }
+            { beforeUnmute: options.beforeUnmute }
         );
     }
 
@@ -1888,28 +1828,36 @@ export class AudioManager {
             return;
         }
         state.moduleTimer = setTimeout(() => {
-            state.moduleTimer = null;
-            if (this._dspReadyFallbacks.get(workletNode) !== state ||
-                state.acknowledged ||
-                this._dspCapabilitiesByNode?.has(workletNode) || this.dspModuleInfo !== info) {
-                return;
-            }
-            info.moduleCloneable = false;
-            console.info('[dsp-wasm] Worklet did not acknowledge the compiled module; using bytes for this session.');
-            try {
-                workletNode.port.postMessage({
-                    type: 'dspModule',
-                    bytes: info.bytes.slice(0),
-                    simd: info.simd,
-                    token
-                });
-                workletNode.port.postMessage({ type: 'dspEnableTypes', types: [] });
-            } catch (error) {
-                this._dspReadyFallbacks.delete(workletNode);
-                console.warn(`[dsp-wasm] Worklet bytes retry failed: ${error?.message || String(error)}`);
-                return;
-            }
+            this._retryDspModuleAsBytes(workletNode, 'Worklet did not acknowledge the compiled module');
         }, DSP_MODULE_READY_TIMEOUT_MS);
+    }
+
+    // Resends the module as bytes when the worklet could not receive the
+    // compiled WebAssembly.Module (reported rejection or missing ack).
+    _retryDspModuleAsBytes(workletNode, reason) {
+        const state = this._dspReadyFallbacks?.get(workletNode);
+        if (!state || state.moduleTimer === null) return;
+        clearTimeout(state.moduleTimer);
+        state.moduleTimer = null;
+        const { info, token } = state;
+        if (state.acknowledged || this._dspCapabilitiesByNode?.has(workletNode) ||
+            this.dspModuleInfo !== info) {
+            return;
+        }
+        info.moduleCloneable = false;
+        console.info(`[dsp-wasm] ${reason}; using bytes for this session.`);
+        try {
+            workletNode.port.postMessage({
+                type: 'dspModule',
+                bytes: info.bytes.slice(0),
+                simd: info.simd,
+                token
+            });
+            workletNode.port.postMessage({ type: 'dspEnableTypes', types: [] });
+        } catch (error) {
+            this._dspReadyFallbacks.delete(workletNode);
+            console.warn(`[dsp-wasm] Worklet bytes retry failed: ${error?.message || String(error)}`);
+        }
     }
 
     _releaseDspActivationWait(workletNode) {
@@ -2097,7 +2045,7 @@ export class AudioManager {
     _visualSyncSource(tapId) {
         const source = this.visualizerSourcesByTap?.get(tapId);
         if (source) return { ruleKey: source.type, params: source.params,
-            execution: 'wasm', tap: { output: 0 } };
+            execution: 'wasm', tap: VISUALIZER_SOURCE_TAP };
         const plugin = this._visualSyncPlugin(tapId);
         if (!plugin) return null;
         return { ruleKey: plugin.constructor.name, params: plugin.getParameters?.() || plugin,
@@ -2176,9 +2124,9 @@ export class AudioManager {
         const due = this._resolveVisualSyncDue(data.pluginId, data.endFrame);
         const now = this._visualSyncNow();
         this._syncedMeasurements ??= [];
-        if (this._syncedMeasurements.length >= VISUAL_SYNC_QUEUE_LIMIT) {
-            this._syncedMeasurements.shift();
-            if (this.telemetryHub?.stats) this.telemetryHub.stats.visualSyncDropped++;
+        if (dropVisualSyncOverflow(this._syncedMeasurements, entry => entry.plugin === plugin) &&
+            this.telemetryHub?.stats) {
+            this.telemetryHub.stats.visualSyncDropped++;
         }
         this._syncedMeasurements.push({ due: Number.isFinite(due) ? due : now, data, plugin });
         this._syncedMeasurements.sort((a, b) => a.due - b.due);
@@ -2255,7 +2203,7 @@ export class AudioManager {
             }
         }
         const taps = { ...this.dspLatencyTaps };
-        for (const source of this.visualizerSources || []) taps[source.tapId] = { output: 0 };
+        for (const source of this.visualizerSources || []) taps[source.tapId] = VISUALIZER_SOURCE_TAP;
         this.visualSyncDelayFrames = context ? requiredOutputDelayFrames({ targets, taps,
             dbtFrames: this._dbtOutputDelayFrames?.get(this._getPrimaryWorkletNode()) || 0,
             deviceLatencyFrames: this._visualSyncDeviceLatencyFrames,
@@ -2449,7 +2397,7 @@ export class AudioManager {
         const data = event?.data || {};
         if (!this._isActiveDspWorklet(workletNode)) return;
         if (data.type === 'dspLatencyResponse' || data.type === 'outputDelaySet' ||
-            data.type === 'jsFallbackBudgetState') {
+            data.type === 'jsFallbackBudgetState' || data.type === 'outputReady') {
             this._settleDspControlResponse(workletNode, data);
         } else if (data.type === 'assetState') {
             this._updateWasmAssetState(
@@ -2603,6 +2551,8 @@ export class AudioManager {
                 activationRequest.loadRequest?.startupWaitReleased) {
                 this._releaseDspActivationWait(workletNode);
             }
+        } else if (data.type === 'dspModuleRejected') {
+            this._retryDspModuleAsBytes(workletNode, 'Worklet could not receive the compiled module');
         } else if (data.type === 'dspReady') {
             this.clearDspReadyFallback(workletNode);
             if (!this.dspModuleInfo) {
@@ -2628,9 +2578,6 @@ export class AudioManager {
                 enabledTypes: activationRequest?.token === token
                     ? activationRequest.targetTypes
                     : undefined,
-                muteOutput: activationRequest?.token === token
-                    ? activationRequest.muteOutput
-                    : true,
                 beforeUnmute: activationRequest?.token === token
                     ? activationRequest.beforeUnmute
                     : null
@@ -2681,7 +2628,14 @@ export class AudioManager {
             this.dspLatencyTaps = data.taps || {};
             this.telemetryHub?.setSources?.(this.dspLatencyTaps);
             this._dspLatencyTapsWorklet = workletNode;
-            this._scheduleVisualSyncUpdate();
+            // The worklet reports latency when it adopts a new plan; reply
+            // without the debounce so setOutputDelay usually lands while the
+            // output gate is still closed for that change.
+            if (this.visualSyncEnabled || this.visualSyncDelayFrames) {
+                if (this._visualSyncUpdateTimer != null) clearTimeout(this._visualSyncUpdateTimer);
+                this._visualSyncUpdateTimer = null;
+                void this._updateVisualSyncDelay();
+            }
             this._publishDspLatency(sampleRate, data);
         } else if (data.type === 'dspCleanupNeeded') {
             workletNode?.port?.postMessage({ type: 'dspCleanupFailed' });
@@ -2772,9 +2726,11 @@ export class AudioManager {
     /**
      * Rebuild the audio processing pipeline
      * @param {boolean} isInitializing - Whether this is the initial build
+     * @param {Object} [options]
+     * @param {boolean} [options.gate] - Ask the worklet to crossfade the membership change
      * @returns {Promise<string>} - Empty string on success, error message on failure
      */
-    async rebuildPipeline(isInitializing = false) {
+    async rebuildPipeline(isInitializing = false, { gate = false } = {}) {
         globalThis.window?.FrequencyPreview?.stop?.();
         const releasePowerLease = this.powerPolicyController?.started
             ? this.powerPolicyController.acquireLease('pipeline-rebuild', { mode: 'force-active' })
@@ -2823,7 +2779,7 @@ export class AudioManager {
         // configs are posted by PipelineProcessor.rebuildPipeline().
         this.registerPipelineProcessors();
         
-        const result = await this.pipelineProcessor.rebuildPipeline(isInitializing);
+        const result = await this.pipelineProcessor.rebuildPipeline(isInitializing, { gate });
         this._scheduleVisualSyncUpdate();
         this.updateExposedProperties();
         const primaryWorklet = this._getPrimaryWorkletNode();
@@ -2953,6 +2909,53 @@ export class AudioManager {
         if (audioPreferences.useWasmDsp !== true) return undefined;
 
         return this._requestDspModuleLoad();
+    }
+
+    get needsSystemResumeRecovery() {
+        const context = this.contextManager?.audioContext;
+        // Reset resumes the newly created context through the same activation
+        // entry point. That context must not wait for reset's own completion;
+        // callers still targeting the old (or absent) context must wait.
+        return this._systemResumeRecoveryPending === true ||
+            (!!this._systemResumeRecoveryPromise && (!this._resetInProgress ||
+                !context || context === this._systemResumeRecoveryContext));
+    }
+
+    handleSystemResume() {
+        if (window.electronAPI?.platform !== 'win32' || !this.contextManager.audioContext) {
+            return Promise.resolve('');
+        }
+        if (this._systemResumeRecoveryPromise) return this._systemResumeRecoveryPromise;
+        this._systemResumeRecoveryPending = true;
+        const controller = this.powerPolicyController;
+        if (controller?.enabled && controller.getEffectiveState() === AudioPowerState.SUSPENDED &&
+            controller.suspendCause != null) {
+            return Promise.resolve('');
+        }
+        return this.recoverFromSystemResume();
+    }
+
+    recoverFromSystemResume() {
+        if (this._systemResumeRecoveryPromise) return this._systemResumeRecoveryPromise;
+        if (!this._systemResumeRecoveryPending) return Promise.resolve('');
+        this._systemResumeRecoveryPending = false;
+        this._systemResumeRecoveryContext = this.contextManager?.audioContext;
+        // Device IDs and AudioContext.state can survive sleep while their native
+        // streams stop. Recreate input and output together, including direct output;
+        // reset(null) preserves preferences, pipeline settings and player state.
+        const operation = Promise.resolve().then(() => this.reset(null)).then(result => {
+            if (result) this._systemResumeRecoveryPending = true;
+            return result;
+        }, error => {
+            this._systemResumeRecoveryPending = true;
+            throw error;
+        });
+        const sharedPromise = operation.finally(() => {
+            this._systemResumeRecoveryPromise = null;
+            this._systemResumeRecoveryContext = null;
+        });
+        this._systemResumeRecoveryPromise = sharedPromise;
+        return sharedPromise;
     }
 
     /**
@@ -3130,15 +3133,22 @@ export class AudioManager {
      * then rebuilds context → worklet → pipeline.
      */
     async _doReset(audioPreferences = null) {
+        const fadeToken = await this.fadeOutOutputForTeardown();
         const inputSnapshot = this.ioManager.getInputSnapshot?.();
         if (this.ioManager.inputSourceNode || inputSnapshot?.state === 'live' ||
             inputSnapshot?.state === 'acquiring') {
-            const released = await this.powerPolicyController
-                ?.requestAudioReconfigurationInputRelease?.({
-                    handoffToSilent: true,
-                    disconnectInput: true
-                });
-            if (released !== true) {
+            let released = false;
+            try {
+                released = await this.powerPolicyController
+                    ?.requestAudioReconfigurationInputRelease?.({
+                        handoffToSilent: true,
+                        disconnectInput: true
+                    }) === true;
+            } finally {
+                // The graph stays in place when the input cannot be released.
+                if (!released) this.fadeInOutputForToken(fadeToken, PIPELINE_SWITCH_FADE_SECONDS);
+            }
+            if (!released) {
                 return 'Audio Error: Failed to release the current audio input safely.';
             }
         }
@@ -3232,9 +3242,9 @@ export class AudioManager {
         await this.waitForDspActivationBeforeOutput();
         await this._notifyAudioGraphRebuilt();
 
-        // After a reset the new outputGainNode starts at 0; ramp it up now that
-        // the pipeline is in place. Same primitive as the startup path in App.
-        this.fadeInOutput();
+        // After a reset the new outputGainNode starts at 0; ramp it up once
+        // the pipeline plays at full level. Same primitive as startup in App.
+        await this.fadeInOutputWhenReady();
 
         return '';
     }
@@ -3319,6 +3329,30 @@ export class AudioManager {
     }
 
     /**
+     * Startup fade-in for a freshly created output (startup, _doReset, the
+     * extension capture). The worklet gate is open before the startup
+     * publication arrives, so that publication closes, commits and settles the
+     * gate; fading in meanwhile would be heard as a blip, a gap, and a second
+     * fade-in. Wait until the worklet confirms it plays the published pipeline
+     * at full level, or until the bounded timeout, then fade in.
+     */
+    async fadeInOutputWhenReady() {
+        const outputOwner = this._captureOutputOwner();
+        const workletNode = this._getPrimaryWorkletNode();
+        // A context that has not started rendering applies the publication
+        // while its gate still settles, so there is no cycle to wait for.
+        if (workletNode?.port && this.contextManager?.audioContext?.state === 'running') {
+            const answer = await this._requestDspControl(
+                workletNode, 'awaitOutputReady', 'outputReady', {}, OUTPUT_READY_TIMEOUT_MS
+            );
+            if (!answer && this._isOutputOwnerCurrent(outputOwner)) {
+                console.warn('[AudioManager] The worklet did not confirm the startup output in time; fading in anyway.');
+            }
+        }
+        this._fadeInOutputIfOwned(outputOwner);
+    }
+
+    /**
      * Fade in only if no newer fade-out has claimed the output.
      * @param {number} token - Token returned by fadeOutOutput()
      * @param {number} duration - fade duration in seconds
@@ -3331,29 +3365,9 @@ export class AudioManager {
     }
 
     /**
-     * Fade out and capture the graph identity that owns the mute.
-     * @param {number} duration - fade duration in seconds
-     * @returns {Object} graph-bound output owner
-     */
-    fadeOutOutputWithOwner(duration = 0.05) {
-        this.fadeOutOutput(duration);
-        return this._captureOutputOwner();
-    }
-
-    /**
-     * Fade in only when the same graph still owns the mute.
-     * @param {Object} owner - owner returned by fadeOutOutputWithOwner()
-     * @param {number} duration - fade duration in seconds
-     * @returns {boolean} whether the owner restored the output
-     */
-    fadeInOutputForOwner(owner, duration = 0.05) {
-        return this._fadeInOutputIfOwned(owner, duration);
-    }
-
-    /**
      * Ramp the output gain down to 0 (mute) without tearing down the graph.
-     * Mirror of fadeInOutput(); used when A/B switching needs to fade out,
-     * swap silently, then fade back in.
+     * Mirror of fadeInOutput(); used when the main thread must rewire or tear
+     * down the graph behind a silent output.
      * @param {number} duration - fade duration in seconds (default 50 ms)
      * @returns {number} ownership token required by the corresponding fade-in
      */
@@ -3375,6 +3389,19 @@ export class AudioManager {
             console.warn('[AudioManager] fadeOutOutput failed, applying immediate mute:', err);
             try { gainNode.gain.value = 0; } catch (_) { /* ignore */ }
         }
+        return token;
+    }
+
+    /**
+     * Fade the output out and wait for the ramp to finish before the caller
+     * releases input, closes the context, or leaves the page. A caller that
+     * returns without tearing down must restore the output with
+     * fadeInOutputForToken(token, ...).
+     * @returns {Promise<number>} ownership token from fadeOutOutput()
+     */
+    async fadeOutOutputForTeardown() {
+        const token = this.fadeOutOutput(PIPELINE_SWITCH_FADE_SECONDS);
+        await waitForPipelineSwitch(PIPELINE_SWITCH_FADE_SECONDS);
         return token;
     }
 
@@ -3526,521 +3553,6 @@ export class AudioManager {
         });
     }
 
-    _wasmAssetKey(pluginId, slot) {
-        return `${pluginId}:${slot}`;
-    }
-
-    _configureWasmAssetTargetResolver(plugin) {
-        if (typeof plugin?.setWasmAssetTargetResolver !== 'function') return;
-        if (!(this._wasmAssetResolverPlugins instanceof WeakSet)) {
-            this._wasmAssetResolverPlugins = new WeakSet();
-        }
-        if (this._wasmAssetResolverPlugins.has(plugin)) return;
-        plugin.setWasmAssetTargetResolver(() => this._getWasmAssetTargetWorklets(plugin));
-        plugin.setWasmAssetOperationObserver?.((
-            workletNode,
-            slot,
-            operationRevision,
-            state,
-            replayEpoch
-        ) => {
-            this._expectWasmAssetOperation(
-                workletNode,
-                plugin.id,
-                slot,
-                operationRevision,
-                state,
-                replayEpoch
-            );
-        });
-        this._wasmAssetResolverPlugins.add(plugin);
-    }
-
-    _configureOwnedPipelineWasmAssetResolvers() {
-        for (const pipeline of [this.pipelineA, this.pipelineB]) {
-            if (!Array.isArray(pipeline)) continue;
-            for (const plugin of pipeline) this._configureWasmAssetTargetResolver(plugin);
-        }
-    }
-
-    _getWasmAssetTargetWorklets(plugin) {
-        const targets = [];
-        if (!(this._wasmAssetMembershipByNode instanceof Map)) return targets;
-        for (const [workletNode, membership] of this._wasmAssetMembershipByNode) {
-            if (!this._isActiveDspWorklet(workletNode) || !(membership instanceof Map)) continue;
-            if ([...membership.values()].some(member => member === plugin)) targets.push(workletNode);
-        }
-        return targets;
-    }
-
-    _pruneWasmAssetStatesForPlugin(workletNode, pluginId) {
-        const states = this._wasmAssetStatesByNode?.get(workletNode);
-        const prefix = `${pluginId}:`;
-        if (states instanceof Map) {
-            for (const key of states.keys()) {
-                if (key.startsWith(prefix)) states.delete(key);
-            }
-        }
-        const revisions = this._wasmAssetExpectedRevisionsByNode?.get(workletNode);
-        if (revisions instanceof Map) {
-            for (const key of revisions.keys()) {
-                if (key.startsWith(prefix)) revisions.delete(key);
-            }
-        }
-        const replayEpochs = this._wasmAssetExpectedReplayEpochsByNode?.get(workletNode);
-        if (replayEpochs instanceof Map) {
-            for (const key of replayEpochs.keys()) {
-                if (key.startsWith(prefix)) replayEpochs.delete(key);
-            }
-        }
-    }
-
-    _normalizedWasmAssetOperationRevision(value) {
-        return Number.isSafeInteger(value) && value > 0 ? value : null;
-    }
-
-    _normalizedWasmAssetReplayEpoch(value) {
-        return Number.isSafeInteger(value) && value > 0 ? value : null;
-    }
-
-    _expectWasmAssetOperation(
-        workletNode,
-        pluginId,
-        slot,
-        operationRevision,
-        state = 1,
-        replayEpoch = null
-    ) {
-        if (!this._isActiveDspWorklet(workletNode) || !Number.isInteger(pluginId)) return false;
-        if (!(this._wasmAssetExpectedReplayEpochsByNode instanceof Map)) {
-            this._wasmAssetExpectedReplayEpochsByNode = new Map();
-        }
-        const key = this._wasmAssetKey(pluginId, slot);
-        let states = this._wasmAssetStatesByNode.get(workletNode);
-        if (!(states instanceof Map)) {
-            states = new Map();
-            this._wasmAssetStatesByNode.set(workletNode, states);
-        }
-        let revisions = this._wasmAssetExpectedRevisionsByNode.get(workletNode);
-        if (!(revisions instanceof Map)) {
-            revisions = new Map();
-            this._wasmAssetExpectedRevisionsByNode.set(workletNode, revisions);
-        }
-        let replayEpochs = this._wasmAssetExpectedReplayEpochsByNode.get(workletNode);
-        if (!(replayEpochs instanceof Map)) {
-            replayEpochs = new Map();
-            this._wasmAssetExpectedReplayEpochsByNode.set(workletNode, replayEpochs);
-        }
-        states.set(key, state >>> 0);
-        revisions.set(key, this._normalizedWasmAssetOperationRevision(operationRevision));
-        replayEpochs.set(key, this._normalizedWasmAssetReplayEpoch(replayEpoch));
-        this._checkPendingSignedExternalAssetRequests();
-        return true;
-    }
-
-    syncPrimaryWasmAssetMembership(pipeline = this.pipeline) {
-        const primaryWorklet = this._getPrimaryWorkletNode();
-        if (!primaryWorklet?.port) return false;
-        return this._syncWasmAssetMembership(primaryWorklet, pipeline, {
-            trackState: true
-        }) !== null;
-    }
-
-    getEffectiveActiveWasmAssetSnapshot(plugin, slots = null, options = {}) {
-        const primaryWorklet = options.primaryWorklet ?? this._getPrimaryWorkletNode();
-        const requestedSlots = Array.isArray(slots)
-            ? [...new Set(slots.filter(slot => Number.isInteger(slot) && slot >= 0))]
-            : [...(plugin?.getWasmAssets?.().keys?.() || [])];
-        const assets = new Map();
-        const revisions = new Map();
-        const rejectedCandidates = new Map();
-        const pendingSlots = [];
-        const missingSlots = [];
-        const membership = this._wasmAssetMembershipByNode?.get(primaryWorklet);
-        const states = this._wasmAssetStatesByNode?.get(primaryWorklet);
-        const expectedRevisions = this._wasmAssetExpectedRevisionsByNode?.get(primaryWorklet);
-        const expectedReplayEpochs = this._wasmAssetExpectedReplayEpochsByNode?.get(primaryWorklet);
-        const desiredAssets = plugin?.getWasmAssets?.() || new Map();
-        const ownsPrimarySlot = Number.isInteger(plugin?.id) &&
-            membership?.get(plugin.id) === plugin;
-
-        for (const slot of requestedSlots) {
-            const key = this._wasmAssetKey(plugin?.id, slot);
-            const state = states?.get(key);
-            const status = Number.isInteger(state) ? (state >>> 0) & 0xff : 0;
-            const operationRevision = expectedRevisions?.get(key);
-            const replayEpoch = expectedReplayEpochs?.get(key) ?? null;
-            const rejection = plugin?.getWasmAssetLastRejection?.(slot);
-            if (rejection) rejectedCandidates.set(slot, rejection);
-
-            if (ownsPrimarySlot && status === 3 &&
-                Number.isSafeInteger(operationRevision) && operationRevision > 0) {
-                const descriptor = plugin?.getWasmAssetRevisionDescriptor?.(
-                    slot,
-                    operationRevision
-                );
-                if (descriptor?.payload instanceof ArrayBuffer) {
-                    assets.set(slot, descriptor);
-                    revisions.set(slot, Object.freeze({ operationRevision, replayEpoch }));
-                    continue;
-                }
-            }
-
-            const desired = desiredAssets.get(slot);
-            const desiredRevision = desired?.operationRevision;
-            const expectedDesired = ownsPrimarySlot && desired &&
-                (!Number.isSafeInteger(desiredRevision) || operationRevision === desiredRevision);
-            if (status === 1 || status === 2 || (status === 0 && expectedDesired)) {
-                pendingSlots.push(slot);
-            } else {
-                missingSlots.push(slot);
-            }
-        }
-
-        return Object.freeze({
-            primaryWorklet,
-            assets,
-            revisions,
-            rejectedCandidates,
-            pendingSlots: Object.freeze(pendingSlots),
-            missingSlots: Object.freeze(missingSlots),
-            ready: pendingSlots.length === 0 && missingSlots.length === 0,
-            stale: false,
-            timedOut: false
-        });
-    }
-
-    waitForEffectiveActiveWasmAssets(plugin, slots = null, options = {}) {
-        const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
-            ? options.timeoutMs
-            : DSP_BYTES_READY_TIMEOUT_MS;
-        const primaryWorklet = options.primaryWorklet ?? this._getPrimaryWorkletNode();
-        const generation = this._audioGraphGeneration;
-        const evaluate = () => this.getEffectiveActiveWasmAssetSnapshot(
-            plugin,
-            slots,
-            { primaryWorklet }
-        );
-        const initial = evaluate();
-        if (initial.ready) return Promise.resolve(initial);
-
-        return new Promise(resolve => {
-            let settled = false;
-            let timer = null;
-            let unsubscribePlugin = () => {};
-            const onGraphRebuilt = () => settle({
-                ...evaluate(),
-                ready: false,
-                stale: true
-            });
-            const settle = result => {
-                if (settled) return;
-                settled = true;
-                if (timer !== null) clearTimeout(timer);
-                unsubscribePlugin();
-                this.removeEventListener('audioGraphRebuilt', onGraphRebuilt);
-                resolve(Object.freeze(result));
-            };
-            const check = () => {
-                if (generation !== this._audioGraphGeneration ||
-                    primaryWorklet !== this._getPrimaryWorkletNode()) {
-                    onGraphRebuilt();
-                    return;
-                }
-                const snapshot = evaluate();
-                if (snapshot.ready) settle(snapshot);
-            };
-            const subscribe = plugin?.addWasmAssetSnapshotChangeListener;
-            unsubscribePlugin = typeof subscribe === 'function'
-                ? subscribe.call(plugin, check)
-                : () => {};
-            this.addEventListener('audioGraphRebuilt', onGraphRebuilt);
-            timer = setTimeout(() => settle({
-                ...evaluate(),
-                ready: false,
-                timedOut: true
-            }), timeoutMs);
-            check();
-        });
-    }
-
-    _syncWasmAssetMembership(workletNode, pipeline, options = {}) {
-        const generation = options.generation ?? this._audioGraphGeneration;
-        if (generation !== this._audioGraphGeneration || !this._isActiveDspWorklet(workletNode)) {
-            return null;
-        }
-        if (!(this._wasmAssetMembershipByNode instanceof Map)) {
-            this._wasmAssetMembershipByNode = new Map();
-        }
-        const previous = this._wasmAssetMembershipByNode.get(workletNode) || new Map();
-        const next = new Map();
-        const added = [];
-        for (const plugin of Array.isArray(pipeline) ? pipeline : []) {
-            if (!Number.isInteger(plugin?.id)) continue;
-            this._configureWasmAssetTargetResolver(plugin);
-            next.set(plugin.id, plugin);
-            if (previous.get(plugin.id) !== plugin) added.push(plugin);
-        }
-        for (const [pluginId, plugin] of previous) {
-            if (next.get(pluginId) !== plugin) this._pruneWasmAssetStatesForPlugin(workletNode, pluginId);
-        }
-        this._wasmAssetMembershipByNode.set(workletNode, next);
-        if (options.replayNew === false) return new Set();
-        return this._replayPipelineWasmAssets(workletNode, added, {
-            generation,
-            trackState: options.trackState === true
-        });
-    }
-
-    _replayPipelineWasmAssets(workletNode, pipeline, options = {}) {
-        const generation = options.generation ?? this._audioGraphGeneration;
-        if (generation !== this._audioGraphGeneration || !this._isActiveDspWorklet(workletNode)) {
-            return null;
-        }
-        if (!(this._wasmAssetStatesByNode instanceof Map)) {
-            this._wasmAssetStatesByNode = new Map();
-        }
-        if (!(this._wasmAssetExpectedRevisionsByNode instanceof Map)) {
-            this._wasmAssetExpectedRevisionsByNode = new Map();
-        }
-        if (!(this._wasmAssetExpectedReplayEpochsByNode instanceof Map)) {
-            this._wasmAssetExpectedReplayEpochsByNode = new Map();
-        }
-        const plugins = Array.isArray(pipeline) ? pipeline : [];
-        const readinessPlugins = new Set(
-            Array.isArray(options.assetReadinessPlugins)
-                ? options.assetReadinessPlugins
-                : plugins
-        );
-        const expected = new Set();
-        for (const plugin of plugins) {
-            if (!Number.isInteger(plugin?.id) || typeof plugin.getWasmAssets !== 'function') continue;
-            const assets = options.assetMaps?.get(plugin) || plugin.getWasmAssets();
-            this._pruneWasmAssetStatesForPlugin(workletNode, plugin.id);
-            for (const [slot, descriptor] of assets) {
-                const key = this._wasmAssetKey(plugin.id, slot);
-                if (readinessPlugins.has(plugin)) expected.add(key);
-                this._expectWasmAssetOperation(
-                    workletNode,
-                    plugin.id,
-                    slot,
-                    descriptor?.operationRevision,
-                    1
-                );
-            }
-        }
-        let states = this._wasmAssetStatesByNode.get(workletNode);
-        if (!(states instanceof Map)) {
-            states = new Map();
-            this._wasmAssetStatesByNode.set(workletNode, states);
-        }
-        for (const plugin of plugins) {
-            if (typeof plugin?.replayWasmAssetsTo !== 'function') continue;
-            if (generation !== this._audioGraphGeneration || !this._isActiveDspWorklet(workletNode)) {
-                return null;
-            }
-            const assets = options.assetMaps?.get(plugin) || plugin.getWasmAssets?.();
-            plugin.replayWasmAssetsTo(workletNode, {
-                trackState: options.trackState === true,
-                ...(assets instanceof Map && { assets })
-            });
-        }
-        return expected;
-    }
-
-    _settleWasmAssetReadyRequest(workletNode, result) {
-        const request = this._pendingWasmAssetReadyRequests?.get(workletNode);
-        if (!request) return;
-        if (request.timer !== null) clearTimeout(request.timer);
-        this._pendingWasmAssetReadyRequests.delete(workletNode);
-        request.resolve(result);
-    }
-
-    _cancelPendingWasmAssetReadyRequests() {
-        if (!(this._pendingWasmAssetReadyRequests instanceof Map)) return;
-        for (const workletNode of [...this._pendingWasmAssetReadyRequests.keys()]) {
-            this._settleWasmAssetReadyRequest(workletNode, false);
-        }
-    }
-
-    _areWasmAssetsActive(workletNode, expected) {
-        const states = this._wasmAssetStatesByNode?.get(workletNode);
-        if (!(states instanceof Map)) return false;
-        let allActive = true;
-        for (const key of expected) {
-            const state = (states.get(key) || 0) & 0xff;
-            if (state === 4) return false;
-            if (state !== 3) allActive = false;
-        }
-        return allActive ? true : null;
-    }
-
-    _captureWasmAssetExpectations(workletNode, expected) {
-        if (expected.size === 0) return new Map();
-        const revisions = this._wasmAssetExpectedRevisionsByNode?.get(workletNode);
-        const replayEpochs = this._wasmAssetExpectedReplayEpochsByNode?.get(workletNode);
-        if (!(revisions instanceof Map) || !(replayEpochs instanceof Map)) return null;
-        const captured = new Map();
-        for (const key of expected) {
-            if (!revisions.has(key) || !replayEpochs.has(key)) return null;
-            captured.set(key, {
-                operationRevision: revisions.get(key),
-                replayEpoch: replayEpochs.get(key)
-            });
-        }
-        return captured;
-    }
-
-    _areWasmAssetExpectationsActive(workletNode, captured) {
-        if (!(captured instanceof Map)) return false;
-        const states = this._wasmAssetStatesByNode?.get(workletNode);
-        const revisions = this._wasmAssetExpectedRevisionsByNode?.get(workletNode);
-        const replayEpochs = this._wasmAssetExpectedReplayEpochsByNode?.get(workletNode);
-        if (!(states instanceof Map) || !(revisions instanceof Map) ||
-            !(replayEpochs instanceof Map)) return captured.size === 0;
-        for (const [key, expected] of captured) {
-            if (revisions.get(key) !== expected.operationRevision ||
-                replayEpochs.get(key) !== expected.replayEpoch ||
-                ((states.get(key) || 0) & 0xff) !== 3) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    _waitForWasmAssetsActive(
-        workletNode,
-        expected,
-        generation = this._audioGraphGeneration,
-        timeoutMs = DSP_BYTES_READY_TIMEOUT_MS
-    ) {
-        if (expected.size === 0) return Promise.resolve(true);
-        if (generation !== this._audioGraphGeneration || !this._isActiveDspWorklet(workletNode)) {
-            return Promise.resolve(false);
-        }
-        const current = this._areWasmAssetsActive(workletNode, expected);
-        if (current !== null) return Promise.resolve(current);
-        if (timeoutMs <= 0) return Promise.resolve(false);
-        if (!(this._pendingWasmAssetReadyRequests instanceof Map)) {
-            this._pendingWasmAssetReadyRequests = new Map();
-        }
-        this._settleWasmAssetReadyRequest(workletNode, false);
-        let resolve;
-        const promise = new Promise(done => { resolve = done; });
-        const request = { expected, generation, timer: null, resolve, promise };
-        request.timer = setTimeout(() => {
-            if (this._pendingWasmAssetReadyRequests.get(workletNode) !== request) return;
-            this._settleWasmAssetReadyRequest(workletNode, false);
-        }, timeoutMs);
-        this._pendingWasmAssetReadyRequests.set(workletNode, request);
-        return promise;
-    }
-
-    _updateWasmAssetState(
-        workletNode,
-        pluginId,
-        slot,
-        state,
-        operationRevision,
-        replayEpoch = null,
-        transportAcknowledged = false
-    ) {
-        if (!transportAcknowledged) {
-            this._wasmAssetMembershipByNode?.get(workletNode)?.get(pluginId)
-                ?.acknowledgeWasmAssetOperation?.(
-                    workletNode,
-                    slot,
-                    operationRevision,
-                    replayEpoch
-                );
-        }
-        const states = this._wasmAssetStatesByNode?.get(workletNode);
-        if (!(states instanceof Map)) return;
-        const key = this._wasmAssetKey(pluginId, slot);
-        if (!states.has(key)) return;
-        const revisions = this._wasmAssetExpectedRevisionsByNode?.get(workletNode);
-        if (!(revisions instanceof Map) || !revisions.has(key)) return;
-        const replayEpochs = this._wasmAssetExpectedReplayEpochsByNode?.get(workletNode);
-        if (!(replayEpochs instanceof Map) || !replayEpochs.has(key)) return;
-        const expectedRevision = revisions.get(key);
-        const expectedReplayEpoch = replayEpochs.get(key);
-        if (expectedRevision === null
-            ? operationRevision !== undefined
-            : operationRevision !== expectedRevision) return;
-        if (this._normalizedWasmAssetReplayEpoch(replayEpoch) !== expectedReplayEpoch) return;
-        states.set(key, state >>> 0);
-        this._checkPendingSignedExternalAssetRequests();
-        const request = this._pendingWasmAssetReadyRequests?.get(workletNode);
-        if (!request || request.generation !== this._audioGraphGeneration ||
-            !this._isActiveDspWorklet(workletNode)) return;
-        const ready = this._areWasmAssetsActive(workletNode, request.expected);
-        if (ready === false && this._parallelPreparing && this._parallelDspBarrier) {
-            for (const node of this._parallelDspBarrier.workletNodes) {
-                this._settleWasmAssetReadyRequest(node, false);
-            }
-        } else if (ready !== null) {
-            this._settleWasmAssetReadyRequest(workletNode, ready);
-        }
-    }
-
-    _updateWasmAssetRejection(workletNode, data) {
-        this._wasmAssetMembershipByNode?.get(workletNode)?.get(data?.pluginId)
-            ?.acknowledgeWasmAssetOperation?.(
-                workletNode,
-                data?.slot,
-                data?.operationRevision,
-                data?.replayEpoch
-            );
-        const states = this._wasmAssetStatesByNode?.get(workletNode);
-        const revisions = this._wasmAssetExpectedRevisionsByNode?.get(workletNode);
-        const replayEpochs = this._wasmAssetExpectedReplayEpochsByNode?.get(workletNode);
-        if (!(states instanceof Map) || !(revisions instanceof Map) ||
-            !(replayEpochs instanceof Map)) return;
-        const key = this._wasmAssetKey(data?.pluginId, data?.slot);
-        if (!states.has(key) || !revisions.has(key) || !replayEpochs.has(key)) return;
-        const expectedRevision = revisions.get(key);
-        const expectedReplayEpoch = replayEpochs.get(key);
-        if (expectedRevision === null
-            ? data?.operationRevision !== undefined
-            : data?.operationRevision !== expectedRevision) return;
-        if (this._normalizedWasmAssetReplayEpoch(data?.replayEpoch) !== expectedReplayEpoch) return;
-        const retainedOperationRevision = this._normalizedWasmAssetOperationRevision(
-            data?.retainedOperationRevision
-        );
-        const retainedReplayEpoch = this._normalizedWasmAssetReplayEpoch(
-            data?.retainedReplayEpoch
-        );
-        const retainedAssetState = Number.isInteger(data?.retainedAssetState)
-            ? data.retainedAssetState >>> 0
-            : 0;
-        const retainedStatus = retainedAssetState & 0xff;
-        const replayFailure = data?.replayFailure === true;
-        if (!replayFailure && expectedRevision !== null && data?.residentRetained === true &&
-            retainedOperationRevision !== null && retainedStatus >= 1 && retainedStatus <= 3) {
-            revisions.set(key, retainedOperationRevision);
-            replayEpochs.set(key, retainedReplayEpoch);
-            this._updateWasmAssetState(
-                workletNode,
-                data.pluginId,
-                data.slot,
-                retainedAssetState,
-                retainedOperationRevision,
-                retainedReplayEpoch,
-                true
-            );
-            return;
-        }
-        this._updateWasmAssetState(
-            workletNode,
-            data.pluginId,
-            data.slot,
-            4,
-            data?.operationRevision,
-            data?.replayEpoch,
-            true
-        );
-    }
-
     _externalAssetSignature(plugin) {
         const info = plugin?.externalAssetInfo;
         if (!info) return '';
@@ -4071,228 +3583,6 @@ export class AudioManager {
             channel: plugin?.channel ?? null,
             parameters
         });
-    }
-
-    _capturePendingSignedExternalAssetRequests(workletNode, pipeline) {
-        const requests = new Map();
-        const states = this._wasmAssetStatesByNode?.get(workletNode);
-        const revisions = this._wasmAssetExpectedRevisionsByNode?.get(workletNode);
-        for (const plugin of Array.isArray(pipeline) ? pipeline : []) {
-            const info = plugin?.externalAssetInfo;
-            const requestedSignature = typeof info?.assetSignature === 'string'
-                ? info.assetSignature
-                : null;
-            if (info?.missing === true) return false;
-            if (info?.pending === true) {
-                requests.set(plugin, {
-                    awaitingPending: true,
-                    requestedFromPending: true,
-                    requestedSignature
-                });
-                continue;
-            }
-            if (requestedSignature === null || !Array.isArray(info?.ids) || info.ids.length === 0) {
-                continue;
-            }
-            const assets = plugin?.getWasmAssets?.();
-            const settled = assets instanceof Map && assets.size > 0 &&
-                [...assets].every(([slot, descriptor]) => {
-                    const key = this._wasmAssetKey(plugin.id, slot);
-                    return descriptor?.externalAssetSignature === requestedSignature &&
-                        revisions?.get(key) === this._normalizedWasmAssetOperationRevision(
-                            descriptor?.operationRevision
-                        ) && ((states?.get(key) || 0) & 0xff) === 3;
-                });
-            if (!settled) requests.set(plugin, {
-                awaitingPending: false,
-                requestedFromPending: false,
-                requestedSignature
-            });
-        }
-        return requests;
-    }
-
-    _evaluateSignedExternalAssetRequest(request) {
-        if (!request || request.generation !== this._audioGraphGeneration ||
-            !this._isActiveDspWorklet(request.workletNode)) {
-            return false;
-        }
-        const states = this._wasmAssetStatesByNode?.get(request.workletNode);
-        const revisions = this._wasmAssetExpectedRevisionsByNode?.get(request.workletNode);
-        const replayEpochs = this._wasmAssetExpectedReplayEpochsByNode?.get(request.workletNode);
-        let pending = false;
-        for (const [plugin, pendingRequest] of request.requests) {
-            const info = plugin?.externalAssetInfo;
-            if (info?.missing === true) return false;
-            if (info?.pending === true) {
-                pending = true;
-                continue;
-            }
-            if (pendingRequest.awaitingPending) {
-                if (!Array.isArray(info?.ids) || info.ids.length === 0 ||
-                    typeof info?.assetSignature !== 'string') {
-                    return false;
-                }
-                pendingRequest.awaitingPending = false;
-                pendingRequest.requestedSignature = info.assetSignature;
-            }
-            const requestedSignature = pendingRequest.requestedSignature;
-            if (typeof requestedSignature !== 'string' || info?.assetSignature !== requestedSignature) {
-                return false;
-            }
-            const assets = plugin?.getWasmAssets?.();
-            if (!(assets instanceof Map) || assets.size === 0 ||
-                [...assets.values()].some(
-                    descriptor => descriptor?.externalAssetSignature !== requestedSignature
-                )) {
-                if (pendingRequest.requestedFromPending === true) return false;
-                pending = true;
-                continue;
-            }
-            for (const [slot, descriptor] of assets) {
-                const key = this._wasmAssetKey(plugin.id, slot);
-                const revision = this._normalizedWasmAssetOperationRevision(
-                    descriptor?.operationRevision
-                );
-                const state = (states?.get(key) || 0) & 0xff;
-                if (state === 4) return false;
-                if (revisions?.get(key) !== revision || !replayEpochs?.has(key) || state !== 3) {
-                    pending = true;
-                }
-            }
-        }
-        return pending ? null : true;
-    }
-
-    _settleSignedExternalAssetRequest(request, result) {
-        if (!request || request.settled) return;
-        request.settled = true;
-        if (request.timer !== null) clearTimeout(request.timer);
-        for (const unsubscribe of request.unsubscribes) unsubscribe();
-        this._pendingSignedExternalAssetRequests?.delete(request);
-        request.resolve(result);
-    }
-
-    _checkPendingSignedExternalAssetRequests() {
-        if (!(this._pendingSignedExternalAssetRequests instanceof Set)) return;
-        for (const request of [...this._pendingSignedExternalAssetRequests]) {
-            const result = this._evaluateSignedExternalAssetRequest(request);
-            if (result !== null) this._settleSignedExternalAssetRequest(request, result);
-        }
-    }
-
-    _cancelPendingSignedExternalAssetRequests() {
-        if (!(this._pendingSignedExternalAssetRequests instanceof Set)) return;
-        for (const request of [...this._pendingSignedExternalAssetRequests]) {
-            this._settleSignedExternalAssetRequest(request, false);
-        }
-    }
-
-    _waitForSignedExternalAssetsOnPrimary(workletNode, pipeline, deadline) {
-        const requests = this._capturePendingSignedExternalAssetRequests(workletNode, pipeline);
-        if (requests === false) return false;
-        if (requests.size === 0) return true;
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) return false;
-        if (!(this._pendingSignedExternalAssetRequests instanceof Set)) {
-            this._pendingSignedExternalAssetRequests = new Set();
-        }
-        for (const plugin of requests.keys()) this._configureWasmAssetTargetResolver(plugin);
-        let resolve;
-        const promise = new Promise(done => { resolve = done; });
-        const request = {
-            workletNode,
-            requests,
-            generation: this._audioGraphGeneration,
-            settled: false,
-            timer: null,
-            unsubscribes: [],
-            resolve,
-            promise
-        };
-        const check = () => {
-            const result = this._evaluateSignedExternalAssetRequest(request);
-            if (result !== null) this._settleSignedExternalAssetRequest(request, result);
-        };
-        for (const plugin of requests.keys()) {
-            request.unsubscribes.push(plugin.addWasmAssetChangeListener?.(check) || (() => {}));
-            request.unsubscribes.push(
-                plugin.addWasmAssetSnapshotChangeListener?.(check) || (() => {})
-            );
-        }
-        request.timer = setTimeout(() => {
-            this._settleSignedExternalAssetRequest(request, false);
-        }, remaining);
-        this._pendingSignedExternalAssetRequests.add(request);
-        check();
-        return promise;
-    }
-
-    _waitForPendingExternalAssetDescriptors(pipeline, deadline) {
-        const plugins = new Set(
-            (Array.isArray(pipeline) ? pipeline : []).filter(
-                plugin => plugin?.externalAssetInfo?.pending === true
-            )
-        );
-        if (plugins.size === 0) return true;
-        const generation = this._audioGraphGeneration;
-        const evaluate = () => {
-            if (generation !== this._audioGraphGeneration) return false;
-            let pending = false;
-            for (const plugin of plugins) {
-                const info = plugin?.externalAssetInfo;
-                if (info?.missing === true) return false;
-                if (info?.pending === true) {
-                    pending = true;
-                    continue;
-                }
-                if (!Array.isArray(info?.ids) || info.ids.length === 0 ||
-                    typeof info?.assetSignature !== 'string') {
-                    return false;
-                }
-                const assets = plugin?.getWasmAssets?.();
-                if (!(assets instanceof Map) || assets.size === 0 ||
-                    [...assets.values()].some(
-                        descriptor => descriptor?.externalAssetSignature !== info.assetSignature
-                    )) {
-                    return false;
-                }
-            }
-            return pending ? null : true;
-        };
-        const initial = evaluate();
-        if (initial !== null) return initial;
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) return false;
-        if (!(this._pendingWasmAssetDescriptorRequests instanceof Set)) {
-            this._pendingWasmAssetDescriptorRequests = new Set();
-        }
-        let resolve;
-        const promise = new Promise(done => { resolve = done; });
-        const request = {
-            settled: false,
-            timer: null,
-            unsubscribes: [],
-            resolve,
-            promise
-        };
-        const check = () => {
-            if (request.settled) return;
-            const result = evaluate();
-            if (result !== null) this._settleWasmAssetDescriptorRequest(request, result);
-        };
-        for (const plugin of plugins) {
-            request.unsubscribes.push(plugin.addWasmAssetChangeListener?.(check) || (() => {}));
-            request.unsubscribes.push(
-                plugin.addWasmAssetSnapshotChangeListener?.(check) || (() => {})
-            );
-        }
-        request.timer = setTimeout(() => {
-            this._settleWasmAssetDescriptorRequest(request, false);
-        }, remaining);
-        this._pendingWasmAssetDescriptorRequests.add(request);
-        check();
-        return promise;
     }
 
     _createBlindBranchSnapshot(pipeline, pluginData = null) {
@@ -4455,22 +3745,6 @@ export class AudioManager {
         const b = this._captureBlindBranchAssets(snapshot.pipelineB);
         if (b === false) return false;
         return a === true && b === true ? true : null;
-    }
-
-    _settleWasmAssetDescriptorRequest(request, result) {
-        if (!request || request.settled) return;
-        request.settled = true;
-        if (request.timer !== null) clearTimeout(request.timer);
-        for (const unsubscribe of request.unsubscribes) unsubscribe();
-        this._pendingWasmAssetDescriptorRequests?.delete(request);
-        request.resolve(result);
-    }
-
-    _cancelPendingWasmAssetDescriptorRequests() {
-        if (!(this._pendingWasmAssetDescriptorRequests instanceof Set)) return;
-        for (const request of [...this._pendingWasmAssetDescriptorRequests]) {
-            this._settleWasmAssetDescriptorRequest(request, false);
-        }
     }
 
     _waitForParallelBranchAssets(snapshot, deadline) {
@@ -5034,7 +4308,12 @@ export class AudioManager {
                     wA?.port ? new Set([wA]) : new Set(),
                     () => true,
                     generation,
-                    { beforeUnmute: () => restoreDirectOutput(false) }
+                    {
+                        // _doReset already owns the faded output and closes
+                        // the context afterwards; do not reopen it here.
+                        muteOutput: options.restorePrimaryDsp !== false,
+                        beforeUnmute: () => restoreDirectOutput(false)
+                    }
                 );
             }
 
@@ -5273,15 +4552,6 @@ export class AudioManager {
     }
     
     /**
-     * Encode audio buffer to WAV format
-     * @param {AudioBuffer} audioBuffer - The audio buffer to encode
-     * @returns {Blob} - WAV file as a Blob
-     */
-    encodeWAV(audioBuffer) {
-        return this.audioEncoder.encodeWAV(audioBuffer);
-    }
-    
-    /**
      * Add an event listener
      * @param {string} eventName - Name of the event
      * @param {Function} callback - Callback function
@@ -5308,3 +4578,5 @@ export class AudioManager {
         this.eventManager.dispatchEvent(eventName, data);
     }
 }
+
+Object.assign(AudioManager.prototype, audioManagerWasmAssetMethods);

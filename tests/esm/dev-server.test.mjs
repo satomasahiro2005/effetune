@@ -61,14 +61,14 @@ test('web-only startup serves the working tree without preparing a documentation
     return status;
   };
   for (const asset of [
-    '/effetune.css',
+    '/css/effetune.css',
     '/features/benchmark-score-reference.js',
     '/images/favicon.ico',
     '/js/app.js',
     '/plugins/plugins.txt',
     '/presets/presets.txt',
     '/sw.js',
-    '/user-data-backup.css'
+    '/css/user-data-backup.css'
   ]) {
     assert.equal(requestStatus(asset), 200, asset);
   }

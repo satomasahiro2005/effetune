@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const moduleUrl = 'data:text/javascript;base64,' + Buffer.from(read('../../js/ui/plugin-list/collapse-manager.js')).toString('base64');
-const css = read('../../effetune-theme.css') + read('../../effetune.css').replace('@import url("effetune-theme.css");', '');
+const css = read('../../css/effetune-theme.css') + read('../../css/effetune.css').replace('@import url("effetune-theme.css");', '');
 const sidebarMarkup = read('../../effetune.html').split('<div class="main-container">')[1]
     .split('<div class="pipeline" id="pipeline">')[0];
 
@@ -81,7 +81,7 @@ test('plugin list and pull tab stay aligned throughout both toggle animations', 
             assert.equal(verticalPositions.after, verticalPositions.before);
             assert.ok(Math.abs(verticalPositions.listTop - 20 * zoom) < 1.5);
 
-            await page.addStyleTag({ content: read('../../effetune-mobile.css') });
+            await page.addStyleTag({ content: read('../../css/effetune-mobile.css') });
             const mobile = await page.evaluate(() => {
                 document.body.classList.add('layout-mobile');
                 document.querySelector('.plugin-list').classList.add('mobile-open');

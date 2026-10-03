@@ -17,7 +17,7 @@ function getRule(css, selector) {
 }
 
 test('settings install element styling preserves hidden attribute semantics', () => {
-  const css = readCss('../../effetune.css');
+  const css = readCss('../../css/effetune.css');
 
   assert.match(
     getRule(css, '.settings-menu-install[hidden]'),

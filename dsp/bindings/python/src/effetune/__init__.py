@@ -25,17 +25,23 @@ from .graph_document import (
 )
 from .presets import LegacyImportReport, import_legacy_preset
 from .telemetry import (
+    AnalogMeterTelemetryChannel,
+    AnalogMeterTelemetryFrame,
+    AnalogMeterTelemetryProgram,
     LevelTelemetryChannel,
     LevelTelemetryFrame,
     NoteSpectrogramTelemetryFrame,
     OscilloscopeTelemetryFrame,
     PitchMeterTelemetryFrame,
+    RhythmAnalyzerTelemetryEvent,
+    RhythmAnalyzerTelemetryFrame,
     SpectrogramHqTelemetryFrame,
     SpectrogramTelemetryFrame,
     SpectrumHqTelemetryFrame,
     SpectrumTelemetryFrame,
     StereoTelemetryFrame,
     TelemetryFrame,
+    TonalBalanceEQTelemetryFrame,
 )
 
 # Keep mutable public catalog data isolated from runtime validation metadata.
@@ -48,6 +54,9 @@ except PackageNotFoundError:
     __version__ = "0+source"
 
 __all__ = [
+    "AnalogMeterTelemetryChannel",
+    "AnalogMeterTelemetryFrame",
+    "AnalogMeterTelemetryProgram",
     "AssetData",
     "AssetError",
     "AssetResolver",
@@ -66,6 +75,8 @@ __all__ = [
     "NoteSpectrogramTelemetryFrame",
     "OscilloscopeTelemetryFrame",
     "PitchMeterTelemetryFrame",
+    "RhythmAnalyzerTelemetryEvent",
+    "RhythmAnalyzerTelemetryFrame",
     "SpectrogramHqTelemetryFrame",
     "SpectrogramTelemetryFrame",
     "SpectrumHqTelemetryFrame",
@@ -74,6 +85,7 @@ __all__ = [
     "StateError",
     "Stream",
     "TelemetryFrame",
+    "TonalBalanceEQTelemetryFrame",
     "ValidationError",
     "__version__",
     "import_legacy_preset",
