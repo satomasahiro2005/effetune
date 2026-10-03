@@ -672,6 +672,8 @@ async function main() {
   check('hello state carries origin and features', data && data.origin === 'remote' &&
     Array.isArray(data.features) && ['origin', 'savePreset', 'irSync', 'telemetry', 'overlays'].every((f) => data.features.includes(f)),
     JSON.stringify({ origin: data?.origin, features: data?.features }));
+  check('hello state carries appName and a build', data?.appName === 'EffeTune' && (data.build === undefined || typeof data.build === 'string'),
+    JSON.stringify({ appName: data?.appName, build: data?.build }));
   const initialRev = data.rev;
 
   ({ ack, data } = await call(ws, { op: 'hello', app: 'EffectDeck', v: 99 }));

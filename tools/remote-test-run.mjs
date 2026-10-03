@@ -97,7 +97,7 @@ async function waitPort(p, open, ms = 90000) {
 }
 
 // Opens a client and resolves { ws, hello } or { closeCode } if the server closes it.
-function tryClient(t, p = port) {
+function tryClient(t, p = port, info = { app: 'remote-test', version: '9.9.9', build: 'b1xyz' }) {
   return new Promise((resolve) => {
     const ws = new WebSocket(`ws://127.0.0.1:${p}/?t=${encodeURIComponent(t)}`);
     const inbox = [];
@@ -107,7 +107,7 @@ function tryClient(t, p = port) {
       inbox.push(m);
       if (m.op === 'state' && m.seq === 1) resolve({ ws, hello: m });
     });
-    ws.on('open', () => ws.send(JSON.stringify({ op: 'hello', v: 1, seq: 1 })));
+    ws.on('open', () => ws.send(JSON.stringify({ op: 'hello', v: 1, seq: 1, ...info })));
     ws.on('close', (code) => resolve({ closeCode: code }));
     ws.on('error', () => {});
     setTimeout(() => resolve({ timeout: true }), 25000);
@@ -256,6 +256,30 @@ try {
   // Toggle off: clients are closed and the port is released.
   const c1 = await tryClient(token);
   check('client connects before toggling off', !!c1.hello, JSON.stringify(c1.closeCode ?? ''));
+  // Version visibility: hello reply names the host build; the panel lists each client's app/version.
+  const appVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  check('hello reply carries appName, app (version) and a git-sha build',
+    c1.hello.appName === 'EffeTune' && c1.hello.app === appVersion && /^[0-9a-f]{7,}$/.test(c1.hello.build || ''),
+    JSON.stringify({ appName: c1.hello.appName, app: c1.hello.app, build: c1.hello.build }));
+  const deviceTexts = () => panel.evaluate(`[...document.querySelectorAll('#devices li')].map(li => li.textContent)`);
+  let devs = (await panel.evaluate('remotePanel.getStatus()')).devices || [];
+  check('panel status lists the client app/version with control characters stripped',
+    devs.length === 1 && devs[0].app === 'remote-test' && devs[0].version === '9.9.9' && devs[0].build === 'b1xyz',
+    JSON.stringify(devs));
+  let texts = await deviceTexts();
+  check('panel DOM lists "remote-test 9.9.9 (b1xyz) · <address>"',
+    texts.length === 1 && texts[0].startsWith('remote-test 9.9.9 (b1xyz) · '), JSON.stringify(texts));
+  const cOld = await tryClient(token, port, {});
+  const cLong = await tryClient(token, port, { app: 'A'.repeat(200), version: 7 });
+  check('old client without app info still gets features, and is listed as an unknown app',
+    Array.isArray(cOld.hello?.features) && cOld.hello.features.includes('telemetry'), JSON.stringify(cOld.hello?.features));
+  devs = (await panel.evaluate('remotePanel.getStatus()')).devices || [];
+  check('panel status: unknown app has null fields; 200-char app cut to 48; non-string version ignored',
+    devs.length === 3 && devs.some((d) => d.app === null && d.version === null) &&
+    devs.some((d) => d.app === 'A'.repeat(48) && d.version === null), JSON.stringify(devs.map((d) => d.app && d.app.length)));
+  texts = await deviceTexts();
+  check('panel DOM shows "Unknown app · <address>" for the old client', texts.some((x) => /^Unknown app · /.test(x)), JSON.stringify(texts));
+  cOld.ws.close(); cLong.ws.close();
   const main1 = await mainWindowSession(cdpPort);
   let icon = await waitIcon(main1, { state: 'connected', badge: '1' });
   check('pipeline header icon: connected with badge 1, in the Effect Pipeline header, same height as its neighbours',

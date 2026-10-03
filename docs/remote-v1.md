@@ -85,7 +85,7 @@ requests that also return data, the ack comes first and the data message carries
 
 | Request | Effect |
 |---|---|
-| `{"op":"hello","v":1}` | Replies with `state`, which also carries `"features":["origin","savePreset","irSync","telemetry","overlays"]`. Any other `v` is rejected. Extra fields (such as `"app"`) are ignored. |
+| `{"op":"hello","v":1,"app":"EffectDeck","version":"2026.09.28","build":"31"}` | Replies with `state`, which also carries `"features":["origin","savePreset","irSync","telemetry","overlays"]`, `"appName"` and (when known) `"build"`. Any other `v` is rejected. `app`, `version` and `build` are optional strings naming the client; they are shown in the Remote Control window (control characters removed, cut to 48 characters). Other extra fields are ignored. |
 | `{"op":"get"}` | Replies with `state`. |
 | `{"op":"chain","pipeline":[...]}` | Replaces the whole pipeline (at most 256 items). If any `nm` is unknown, the request fails and nothing changes. Master bypass keeps its state. |
 | `{"op":"params","index":i,"params":{...}}` | Applies the keys to stage `i` (0-based) of the current pipeline. Keys that are not given stay as they are. |
@@ -123,6 +123,8 @@ the computer by applying every push that does not carry one of its own `seq` val
 Replies to `hello` and `get` carry the request's `seq` and `"origin":"remote"`. They are
 snapshots, not echoes of an edit: always apply them. A command that leaves the pipeline as it
 was produces no push, so do not wait for one to confirm a command; the ack does that.
+
+The reply to `hello` also carries `"appName"` (`"EffeTune"`) and `"build"` (a git short sha or a build date; omitted when unknown), next to `"app"`, which is the version string. They are for display. Clients decide what they can do from `features`, never from `app` or the version.
 
 ### Telemetry
 

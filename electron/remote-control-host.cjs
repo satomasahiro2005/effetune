@@ -14,7 +14,9 @@
 // a few times, then the next free port above it is used (47300 -> 47301..47309);
 // the pairing URL, QR code, connect string and window title carry the bound port.
 
+const { execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
@@ -65,6 +67,37 @@ const SEND_HIGH_WATER_BYTES = 8 * 1024 * 1024;
 const IR_ID_PATTERN = /^[a-f0-9]{24}$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{4,64}$/;
 const FEATURES = Object.freeze(['origin', 'savePreset', 'irSync', 'telemetry', 'overlays']);
+const APP_NAME = 'EffeTune';
+const CLIENT_INFO_MAX = 48;
+
+// Client-supplied text shown in the Remote Control window: strip control characters, cap length.
+function cleanClientText(value) {
+  if (typeof value !== 'string') return null;
+  return value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, CLIENT_INFO_MAX) || null;
+}
+
+// Build id reported in the hello reply: injected sha, else git sha (unpackaged), else app.asar date.
+function resolveBuild(app) {
+  let appPath = '';
+  try { appPath = app.getAppPath(); } catch (_) { return null; }
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(appPath, 'package.json'), 'utf8'));
+    const injected = cleanClientText(pkg?.effetuneBuild);
+    if (injected) return injected;
+  } catch (_) { /* ignore */ }
+  if (!app.isPackaged) {
+    try {
+      const sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+        cwd: appPath, timeout: 2000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore']
+      }).toString().trim();
+      if (/^[0-9a-f]{4,40}$/.test(sha)) return sha;
+    } catch (_) { /* ignore */ }
+    return null;
+  }
+  try {
+    return fs.statSync(appPath).mtime.toISOString().slice(0, 10);
+  } catch (_) { return null; }
+}
 const CLIENT_OPS = new Set([
   'hello', 'get', 'chain', 'params', 'bypass', 'listPresets', 'getPreset',
   'savePreset', 'listIRs', 'getIR', 'putIR', 'telemetry'
@@ -159,6 +192,7 @@ class RemoteControlHost {
     log = console.log
   }) {
     this.app = app;
+    this.build = resolveBuild(app);
     this.getMainWindow = getMainWindow;
     this.config = config;
     this.log = log;
@@ -285,7 +319,13 @@ class RemoteControlHost {
       addresses,
       url: addresses[0]?.url || null,
       error: this.listenError,
-      clients: this.countClients()
+      clients: this.countClients(),
+      devices: [...(this.wss?.clients || [])].filter(ws => ws.authenticated).map(ws => ({
+        address: ws.remoteAddress || '',
+        app: ws.clientInfo?.app ?? null,
+        version: ws.clientInfo?.version ?? null,
+        build: ws.clientInfo?.build ?? null
+      }))
     };
   }
 
@@ -766,6 +806,7 @@ class RemoteControlHost {
       return;
     }
     ws.authenticated = true;
+    ws.remoteAddress = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
     ws.isAlive = true;
     ws.uploads = new Map();
     ws.telemetry = null;
@@ -819,6 +860,14 @@ class RemoteControlHost {
       this.ack(ws, seq, false, `unsupported-version: ${String(msg.v).slice(0, 16)}`);
       return;
     }
+    if (op === 'hello') {
+      ws.clientInfo = {
+        app: cleanClientText(msg.app),
+        version: cleanClientText(msg.version),
+        build: cleanClientText(msg.build)
+      };
+      this.emitStatus();
+    }
     if (op === 'telemetry') {
       this.onTelemetry(ws, msg, seq);
       return;
@@ -842,7 +891,13 @@ class RemoteControlHost {
     const seqField = seq === undefined ? {} : { seq };
     switch (op) {
       case 'hello':
-        this.send(ws, this.stateMessage({ origin: 'remote', features: FEATURES, ...seqField }));
+        this.send(ws, this.stateMessage({
+          origin: 'remote',
+          features: FEATURES,
+          appName: APP_NAME,
+          ...(this.build ? { build: this.build } : {}),
+          ...seqField
+        }));
         break;
       case 'get':
         this.send(ws, this.stateMessage({ origin: 'remote', ...seqField }));
