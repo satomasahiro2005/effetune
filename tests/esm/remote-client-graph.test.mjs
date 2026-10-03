@@ -56,7 +56,10 @@ test('remote.html is a plain page: same-origin scripts only and no inline code',
     const html = fs.readFileSync(path.join(root, 'remote.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
     assert.match(html, /script-src 'self'(?!\s+['"]?(unsafe|https))/);
     assert.ok(!/unsafe-eval/.test(html));
-    assert.ok(!/connect-src/.test(html), 'connect-src is supplied by the server that sends the page');
+    // The server's header pins connect-src to its exact host; the meta policy only has to let a ws: URL
+    // through (WebKit does not count ws:// as 'self'), and policies intersect.
+    assert.match(html, /connect-src 'self' ws:(?=[;"])/);
+    assert.ok(!/connect-src[^;"]*(https?:|\*)/.test(html), 'the meta policy opens nothing beyond ws:');
     for (const tag of html.matchAll(/<script\b([^>]*)>/g)) {
         assert.match(tag[1], /\bsrc="/, `inline script: ${tag[0]}`);
     }

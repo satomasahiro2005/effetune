@@ -63,6 +63,9 @@ async function waitFor(fn, ms = 3000, step = 25) {
   }
 }
 
+const SEED_PRESET = { name: 'Sync Seed', plugins: [
+  { nm: 'Volume', en: true, vl: -6 }, { nm: '5Band PEQ', en: true }, { nm: 'Volume', en: true, vl: -3 }] };
+
 const canon = (value) => JSON.stringify(value, (_k, v) =>
   (v && typeof v === 'object' && !Array.isArray(v)
     ? Object.fromEntries(Object.keys(v).sort().map((key) => [key, v[key]])) : v));
@@ -211,8 +214,7 @@ async function main() {
       const original = ui[name];
       ui[name] = function (...args) { window.__toasts.push(String(args[0])); return original.apply(this, args); };
     }
-    return window.pipelineManager.presetManager.loadPreset({ name: 'Sync Seed', plugins: [
-      { nm: 'Volume', en: true, vl: -6 }, { nm: '5Band PEQ', en: true }, { nm: 'Volume', en: true, vl: -3 }] });
+    return window.pipelineManager.presetManager.loadPreset(${JSON.stringify(SEED_PRESET)});
   })()`);
   await waitFor(async () => (await hostSnap()).pipeline.length === 3, 5000);
   out(`host ready: ${JSON.stringify((await hostSnap()).ids)}`);
@@ -241,8 +243,8 @@ async function main() {
 
   // ---- pages -----------------------------------------------------------------
   const consoleErrors = consoleErrorsAll;
-  async function openClientPage(label, address) {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  async function openClientPage(label, address, { engine = browser, token = TOKEN } = {}) {
+    const context = await engine.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     await page.addInitScript(() => {
       window.__audioContexts = 0;
@@ -255,7 +257,7 @@ async function main() {
     });
     page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(`${label}: ${m.text()}`); });
     page.on('pageerror', (e) => consoleErrors.push(`${label}: pageerror ${String(e)}`));
-    await page.goto(`http://${address}:${PORT}/?t=${TOKEN}`);
+    await page.goto(`http://${address}:${PORT}/?t=${token}`);
     await page.waitForFunction(() => window.remoteClient?.engine?.confirmed?.snapshot, null, { timeout: 60000 });
     await page.evaluate(() => {
       window.__acks = [];
@@ -742,7 +744,102 @@ async function main() {
     await waitFor(() => sameAsHost(P1), 5000, 100);
   }
 
-  // ---- 18. token rotation (last: it ends P1's pairing) ---------------------------------------------------------------------
+  // ---- 21. a recycled plugin instance does not keep the old buses (review finding) ---------------------------------------
+  {
+    out('  ... 21. recycled instances');
+    const loadOnHost = (file, name) => host.evaluate(`window.pipelineManager.presetManager.loadPreset(${
+      JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(root, 'presets', file), 'utf8')), name })})`);
+    const editsOf = (p) => evalIn(p, () => window.__acks.filter((a) => a.message.op === 'edit').length);
+    const divergencesBefore = await evalIn(P1, () => window.remoteClient.engine.divergences);
+    const editsBefore = await editsOf(P1);
+    const problems = [];
+    // rear_reverb: channel 34 on Volume, Hi Pass Filter and Stereo Blend; dsd_noise: input bus on Hi Pass Filter;
+    // karaoke: output bus on Stereo Blend; needle_drop has the same effects with no bus or channel at all.
+    for (const file of ['4ch/rear_reverb.effetune_preset', 'lofi/needle_drop.effetune_preset', 'lofi/dsd_noise.effetune_preset',
+      'lofi/needle_drop.effetune_preset', 'others/karaoke.effetune_preset', 'lofi/needle_drop.effetune_preset']) {
+      await loadOnHost(file, 'recycle');
+      const ok = await waitFor(async () => (await sameAsHost(P1)) && (await sameAsHost(P2)), 5000, 50);
+      const h = await hostSnap();
+      if (ok === null) problems.push(`${file}: clients did not converge`);
+      if (file.includes('needle_drop') && h.pipeline.some((item) => 'ib' in item || 'ob' in item || 'ch' in item)) problems.push(`${file}: host has buses`);
+      if (file.includes('needle_drop')) {
+        const buses = await evalIn(P1, () => window.audioManager.pipeline.filter((x) => x.inputBus != null || x.outputBus != null || x.channel != null).length);
+        if (buses !== 0) problems.push(`${file}: ${buses} client plugins kept a bus or channel`);
+      }
+    }
+    check('21 loading presets with and without buses/channels converges on both clients, buses cleared on recycled instances',
+      problems.length === 0, problems.join(' | '));
+    const divergencesAfter = await evalIn(P1, () => window.remoteClient.engine.divergences);
+    check('21 the reconcile safety net never had to fix anything up', divergencesAfter === divergencesBefore, `${divergencesBefore} -> ${divergencesAfter}`);
+    // A structural edit now must not drag stale bus state back to the host.
+    const beforeEdit = await hostSnap();
+    await gesture(P1);
+    await evalIn(P1, () => { window.uiManager.pluginListManager.addPluginToPipeline({ name: 'Mute' }); });
+    const added = await waitFor(async () => (await hostSnap()).ids.length === beforeEdit.ids.length + 1, 3000);
+    await waitFor(() => allEqual(P1, P2), 3000, 50);
+    await sleep(200);
+    const afterEdit = await hostSnap();
+    const keptStages = afterEdit.ids.map((id, k) => [id, afterEdit.pipeline[k]]).filter(([id]) => beforeEdit.ids.includes(id));
+    const unchanged = keptStages.length === beforeEdit.ids.length && keptStages.every(([id, item]) =>
+      canon(item) === canon(beforeEdit.pipeline[beforeEdit.ids.indexOf(id)]));
+    const editsSent = (await editsOf(P1)) - editsBefore;
+    check('21 a structural edit after the recycling sends only the new stage (host stages unchanged, one edit message)',
+      added !== null && unchanged && editsSent === 1, `edits +${editsSent}`);
+    await host.evaluate(`window.pipelineManager.presetManager.loadPreset(${JSON.stringify(SEED_PRESET)})`);
+    await waitFor(async () => (await hostSnap()).pipeline.length === 3 && await allEqual(P1, P2), 5000, 50);
+  }
+
+  // ---- 24. an edit made against the other pipeline is refused (review finding) --------------------------------------------
+  {
+    const state = await evalIn(P1, () => {
+      const c = window.remoteClient.engine.confirmed;
+      return { epoch: c.epoch, rev: c.rev, slot: c.snapshot.slot };
+    });
+    const ack = await evalIn(P1, (c) => window.remoteClient.session.send({
+      op: 'edit', epoch: c.epoch, base: c.rev, slot: c.slot === 'A' ? 'B' : 'A',
+      ops: [{ t: 'ins', id: 'cslot.1', after: null, at: 0, item: { nm: 'Mute', en: true } }] }), state);
+    check('24 an edit whose slot is not the host\'s active slot is refused with slot-mismatch and nothing changes',
+      ack.ok === false && ack.error === 'slot-mismatch' && (await hostSnap()).pipeline.length === 3, JSON.stringify(ack));
+    const fine = await evalIn(P1, (c) => window.remoteClient.session.send({
+      op: 'edit', epoch: c.epoch, base: c.rev, slot: c.slot, ops: [{ t: 'del', id: 'cslot.nope' }] }), state);
+    check('24 an edit with the right slot is accepted', fine.ok === true, JSON.stringify(fine));
+  }
+
+  // ---- 23. every plugin added through the UI converges and stays quiet (reviewer's probe) -------------------------------
+  {
+    out('  ... 23. every plugin inserted by gesture');
+    const errorsBefore = consoleErrors.length;
+    const names = await evalIn(P1, () => Object.keys(window.pluginManager.pluginClasses));
+    const editsOf = (p) => evalIn(p, () => window.__acks.filter((a) => a.message.op === 'edit').length);
+    const bad = [];
+    for (const name of names) {
+      await host.evaluate("window.pipelineManager.presetManager.loadPreset({ name: 'probe', plugins: [] })");
+      await waitFor(async () => (await snap(P1)).ids.length === 0 && (await hostSnap()).ids.length === 0, 3000, 25);
+      await gesture(P1);
+      await evalIn(P1, (n) => { window.uiManager.pluginListManager.addPluginToPipeline({ name: n }); }, name);
+      const landed = await waitFor(async () => (await hostSnap()).pipeline.length === 1 && await sameAsHost(P1), 4000, 25);
+      await sleep(150);
+      const e0 = await editsOf(P1);
+      for (let k = 0; k < 3; k += 1) { await gesture(P1); await sleep(120); }
+      const e1 = await editsOf(P1);
+      if (landed === null || e1 !== e0 || !(await sameAsHost(P1))) {
+        const c = await snap(P1);
+        const h = await hostSnap();
+        const keys = c.pipeline[0] && h.pipeline[0]
+          ? Object.keys({ ...c.pipeline[0], ...h.pipeline[0] }).filter((key) => canon(c.pipeline[0][key]) !== canon(h.pipeline[0][key])) : [];
+        bad.push(`${name}: landed=${landed !== null} extraEdits=${e1 - e0} differing=${keys.join(',')}`);
+      }
+    }
+    const probeErrors = consoleErrors.slice(errorsBefore).filter((e) => !/favicon/i.test(e));
+    check(`23 each of the ${names.length} plugins inserted on a client by gesture converges with the host and causes no extra edit messages`,
+      bad.length === 0, JSON.stringify(bad.slice(0, 6)));
+    check('23 and the clients raised no console error or page error meanwhile (Cassette Artifacts included)', probeErrors.length === 0,
+      JSON.stringify(probeErrors.slice(0, 4)));
+    await host.evaluate(`window.pipelineManager.presetManager.loadPreset(${JSON.stringify(SEED_PRESET)})`);
+    await waitFor(async () => (await hostSnap()).pipeline.length === 3 && await allEqual(P1, P2), 5000, 50);
+  }
+
+  // ---- 18. token rotation (last: it ends P1's pairing)---------------------------------------------------------------------
   {
     out('  ... 18. token rotation');
     const newStatus = await panel.evaluate('remotePanel.regenerateToken()');
@@ -796,15 +893,49 @@ async function main() {
     check('16 and the host publishes its real pipeline again', await waitFor(async () => (await hostSnap()).pipeline.length === 3, 5000, 100) !== null);
   }
 
-  // ---- 22. WebKit (optional) -------------------------------------------------------------------------------------------------
+  // ---- 22. WebKit (the owner's iPhone runs Safari) -----------------------------------------------------------------------
   {
-    let webkit = null;
+    out('  ... 22. WebKit');
+    let engine = null;
     try {
-      const { webkit: engine } = require('playwright');
-      if (fs.existsSync(engine.executablePath())) webkit = engine;
+      const { webkit } = require('playwright');
+      if (fs.existsSync(webkit.executablePath())) engine = webkit;
     } catch (_) { /* not installed */ }
-    if (!webkit) skip('22 WebKit repeat of checks 2-4', 'Playwright WebKit is not installed');
-    else out('  (WebKit is installed but the repeat is not wired up in this run)');
+    if (!engine) skip('22 WebKit repeat of checks 2-4', 'Playwright WebKit is not installed (npx playwright install webkit)');
+    else {
+      const wk = await engine.launch();
+      browsers.push(wk);
+      const freshToken = (await panel.evaluate('remotePanel.getStatus()')).token;
+      const errorsBefore = consoleErrors.length;
+      const W = await openClientPage('WK', '127.0.0.1', { engine: wk, token: freshToken });
+      const info = await evalIn(W, () => ({
+        search: location.search,
+        token: localStorage.getItem('effetune.remote.token'),
+        audioContexts: window.__audioContexts,
+        status: document.getElementById('remoteStatus').textContent
+      }));
+      check('22 WebKit bootstrap: the WebSocket is not blocked by the CSP, token stored and stripped, connected',
+        info.search === '' && info.token === freshToken && info.audioContexts === 0 && info.status === 'Connected', JSON.stringify(info));
+      check('22 WebKit shows the host\'s pipeline', await sameAsHost(W));
+      await host.evaluate(`(() => { const p = window.audioManager.pipeline[0]; p.setParameters({ vl: -13 });
+        window.pipelineManager.core.updateWorkletPlugin(p); window.uiManager.updateURL(); })()`);
+      const t1 = await waitFor(async () => (await snap(W)).pipeline[0].vl === -13, 1500);
+      check('22 a host edit reaches the WebKit page within 500 ms', t1 !== null && t1 <= 500, `${t1} ms`);
+      await W.page.locator('.pipeline-item').first().locator('input[type=range]').first().evaluate((el) => {
+        el.value = '-8';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      const th = await waitFor(async () => (await hostSnap()).pipeline[0].vl === -8, 1500);
+      check('22 a slider edit in WebKit reaches the host within 500 ms', th !== null && th <= 500, `${th} ms`);
+      await gesture(W);
+      await evalIn(W, () => { window.uiManager.pluginListManager.addPluginToPipeline({ name: 'Mute' }); });
+      const added = await waitFor(async () => (await hostSnap()).pipeline.length === 4 && await sameAsHost(W), 3000);
+      check('22 adding a plugin in WebKit reaches the host with the client\'s id', added !== null);
+      const wkErrors = consoleErrors.slice(errorsBefore).filter((e) => e.startsWith('WK') && !/favicon/i.test(e));
+      check('22 WebKit raised no console error or page error', wkErrors.length === 0, JSON.stringify(wkErrors.slice(0, 4)));
+      await W.context.close();
+    }
   }
 }
 

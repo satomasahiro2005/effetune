@@ -17,6 +17,7 @@ import { RemoteAudioManager } from './remote-audio-manager.js';
 import { RemoteSession, resolveRemoteTarget } from './remote-session.js';
 import { SyncEngine } from './remote-sync-engine.mjs';
 import { createRemoteUiManager, loadTranslations, RemoteMobileShell } from './remote-ui-manager.js';
+import { guardPluginsForClientCsp } from './client-csp-guards.js';
 import { applyOpsToPipeline, createIdRegistry, finishBatch, randomClientPrefix } from './pipeline-apply.js';
 
 const MESSAGE_DURATION_MS = 3000;
@@ -111,6 +112,7 @@ export async function startRemoteClient(win = window) {
         pluginManager.loadPlugins(),
         loadTranslations({ language: win.navigator.language })
     ]);
+    guardPluginsForClientCsp(pluginManager);
     const createPlugin = pluginManager.createPlugin.bind(pluginManager);
     pluginManager.createPlugin = name => {
         const plugin = createPlugin(name);
