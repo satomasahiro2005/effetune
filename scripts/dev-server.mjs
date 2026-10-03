@@ -17,10 +17,12 @@ const webAppRootFiles = new Set([
   'effetune-mobile.css',
   'effetune-theme.css',
   'effetune.css',
+  'effetune-remote.css',
   'effetune.html',
   'manifest.json',
   'package.json',
   'pipeline-analyzer.css',
+  'remote.html',
   'sw-precache.js',
   'sw.js',
   'user-data-backup.css'
