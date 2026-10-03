@@ -28,6 +28,9 @@ const overlay = JSON.parse(fs.readFileSync(
   path.join(repoRoot, 'examples', 'dsp-library', 'docs', 'effects-v1.docs.json'),
   'utf8'
 ));
+const proseMap = JSON.parse(fs.readFileSync(path.join(
+  repoRoot, 'examples', 'dsp-library', 'docs', 'effect-prose-map-v0.1.json'
+), 'utf8'));
 const routes = JSON.parse(fs.readFileSync(path.join(
   repoRoot, 'examples', 'dsp-library', 'docs', 'routes-v0.1.json'
 ), 'utf8'));
@@ -79,6 +82,9 @@ test('DSP documentation outputs are deterministic and catalog-complete', () => {
     ), 'utf8');
     assert.match(page, /The following section is reproduced from the English EffeTune app documentation/);
     assert.match(page, new RegExp(`Semantic type: \\\`${effect.type}\\\``));
+    for (const heading of proseMap.guiOnlyHeadings) {
+      assert.ok(!page.includes(`\n### ${heading}\n`), `${effect.type}: ${heading}`);
+    }
     if (effect.parameters.length > 0) {
       assert.match(page, /\| Semantic name \| Python constructor keyword \|/);
       for (const parameter of effect.parameters) {
@@ -144,7 +150,7 @@ test('DSP landing explains the cross-surface workflow without competitor framing
   assert.match(landing, /What stays consistent \{#library-strengths\}/);
   assert.match(
     landing,
-    /Eight analyzers expose opt-in decoded observations/
+    /Ten analyzers and Tonal Balance EQ expose opt-in decoded observations/
   );
   assert.match(landing, /all other catalog telemetry remains metadata-only/);
   assert.doesNotMatch(landing, /v0\.1 has no public observation API/);
@@ -307,10 +313,12 @@ test('analyzer telemetry documentation matches the public Phase 1 facade', () =>
     repoRoot, 'docs', 'dsp', 'reference', 'compatibility', 'index.md'
   ), 'utf8');
   for (const type of [
+    'AnalogMeter',
     'ChromaSpiral',
     'LevelMeter',
     'Oscilloscope',
     'PitchMeter',
+    'RhythmAnalyzer',
     'SpectrumAnalyzer',
     'Spectrogram',
     'StereoMeter'
@@ -342,7 +350,8 @@ test('analyzer telemetry documentation matches the public Phase 1 facade', () =>
     /does not automatically collect, persist,\s+or send telemetry over the network/
   );
   assert.match(compatibility, /does not collect device or user identifiers/);
-  assert.match(compatibility, /Integrated LUFS/);
+  assert.match(compatibility, /`maxTruePeak` \/ `max_true_peak` in dBTP/);
+  assert.doesNotMatch(compatibility, /Integrated LUFS/);
 
   const python = fs.readFileSync(path.join(
     repoRoot, 'docs', 'dsp', 'api', 'python', 'index.md'

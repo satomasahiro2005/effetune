@@ -21,6 +21,7 @@ const constants = require('./constants');
 const configModule = require('./config');
 const windowState = require('./window-state');
 const ipcHandlers = require('./ipc-handlers');
+const visualizerFeed = require('./visualizer-feed');
 const fileHandlers = require('./file-handlers');
 const { queueAutoRestart } = require('./relaunch');
 const { initializeGpuAcceleration } = require('./gpu-acceleration.cjs');
@@ -380,6 +381,10 @@ function handleSystemResumeForWatchdog() {
   watchdogSystemSuspended = false;
   if (shouldRearm) armRendererWatchdog('system-resume');
   updateOpenHomeEnvironmentAvailability(true);
+  const mainWindow = constants.getMainWindow();
+  if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('system-resume');
+  }
 }
 
 function registerWatchdogPowerEvents() {
@@ -721,11 +726,8 @@ function createWindow() {
     e.preventDefault();
   });
   
-  // Enable file drag and drop
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    // Prevent opening new windows
-    return { action: 'deny' };
-  });
+  // Only the Visualizer clean feed may open a window; all others are denied.
+  visualizerFeed.attachMainWindow(mainWindow, { onMenuChanged: ipcHandlers.refreshMenu });
 
   // Set up the application menu
   ipcHandlers.createMenu();
@@ -1030,12 +1032,16 @@ function createSplashScreen() {
   });
   
   // Create HTML content for splash window
+  const brandAnimationModuleUrl = JSON.stringify(
+    pathToFileURL(path.join(__dirname, '../js/ui/brand-animation.js')).href
+  ).replace(/[<>\u2028\u2029]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
   const splashContent = `
   <!DOCTYPE html>
-  <html>
+  <html data-theme="${preset.id}">
   <head>
     <meta charset="UTF-8">
     <title>EffeTune</title>
+    <link rel="stylesheet" href="${pathToFileURL(path.join(__dirname, '../css/effetune-theme.css')).href}">
     <style>
       body {
         background-color: color-mix(in srgb, ${preset.windowBackground} 90%, transparent);
@@ -1050,7 +1056,15 @@ function createSplashScreen() {
         border-radius: 8px;
         overflow: hidden;
       }
+      .splash-canvas {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
       .splash-container {
+        position: relative;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -1097,6 +1111,7 @@ function createSplashScreen() {
     </style>
   </head>
   <body>
+    <canvas class="splash-canvas" id="splash-canvas"></canvas>
     <div class="splash-container">
       <div class="splash-header">
         <img src="${path.join(__dirname, '../images/icon_64x64.png')}" class="splash-icon" alt="EffeTune Icon">
@@ -1109,6 +1124,14 @@ function createSplashScreen() {
         <div class="splash-loading">Starting application...</div>
       </div>
     </div>
+    <script type="module">
+      import { startBrandAnimation } from ${brandAnimationModuleUrl};
+      startBrandAnimation(document.getElementById('splash-canvas'), {
+        icon: document.querySelector('.splash-icon'),
+        title: document.querySelector('.splash-header h2'),
+        reveal: [...document.querySelector('.splash-content').children]
+      });
+    </script>
   </body>
   </html>
   `;

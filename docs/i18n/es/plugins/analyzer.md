@@ -1,6 +1,6 @@
 ---
 title: "Plugins de análisis - EffeTune"
-description: "Plugins de análisis de audio, incluidos Chroma Spiral, Level Meter, Note Spectrogram, Oscilloscope, Pitch Meter, Spectrogram, Spectrum Analyzer y Stereo Meter."
+description: "Plugins de análisis de audio, incluidos Analog Meter, Chroma Spiral, Level Meter, Note Spectrogram, Oscilloscope, Pitch Meter, Rhythm Analyzer, Spectrogram, Spectrum Analyzer y Stereo Meter."
 lang: es
 ---
 
@@ -10,14 +10,86 @@ Una colección de plugins que te permiten ver tu música de formas fascinantes. 
 
 ## Lista de Plugins
 
+- [Analog Meter](#analog-meter) - Muestra los niveles de canal en un medidor de aguja con escalas VU, PPM, pico y sonoridad
 - [Chroma Spiral](#chroma-spiral) - Sitúa los componentes de frecuencia en una espiral de notas y octavas
 - [Level Meter](#level-meter) - Muestra el nivel de señal digital y posibles recortes
 - [Note Spectrogram](#note-spectrogram) - Muestra las alturas estimadas a lo largo del tiempo en un piano roll
 - [Oscilloscope](#oscilloscope) - Muestra la visualización de forma de onda en tiempo real
 - [Pitch Meter](#pitch-meter) - Sigue una frecuencia fundamental y su afinación a lo largo del tiempo
+- [Rhythm Analyzer](#rhythm-analyzer) - Muestra el tempo, los golpes pulso a pulso y cuánto se adelanta o se retrasa cada parte
 - [Spectrogram](#spectrogram) - Crea hermosos patrones visuales a partir de tu música
 - [Spectrum Analyzer](#spectrum-analyzer) - Muestra las diferentes frecuencias en tu música
 - [Stereo Meter](#stereo-meter) - Visualiza el balance estéreo y las relaciones de fase
+
+## Analog Meter
+
+Muestra el nivel de cada canal en un medidor de aguja clásico, sin cambiar el sonido. Úsalo para seguir de un momento a otro cuánto suena tu música, o para ver cómo se lee tu reproducción en las escalas usadas en la radiodifusión y el streaming: VU, PPM, pico y sonoridad (LUFS).
+
+### Guía de uso
+
+- **Sigue el nivel medio con VU**: observa la aguja durante una canción. Las estrofas tranquilas y los estribillos intensos muestran una diferencia clara, mientras que los golpes cortos de batería apenas mueven la aguja.
+- **Comprueba el recorte con True Peak**: coloca Analog Meter después de tus efectos de EQ y ganancia, y reproduce la parte más intensa de una pista. Si la lectura supera 0 dBFS o se enciende el indicador over, la cadena puede recortar; baja la ganancia hasta que los picos se mantengan por debajo de 0 dBFS, con un pequeño margen como -1 dBFS.
+- **Compara canciones con Loudness**: ajusta **Target** a una referencia de streaming como -14 LUFS, pulsa **Reset** al empezar una canción o álbum y reprodúcelo entero. El valor Integrated muestra su sonoridad global y el máximo True Peak muestra su pico más alto, lo que sirve de guía para igualar el volumen entre las canciones de un álbum o lista. LRA te permite comparar cuánto varía la sonoridad de cada canción.
+
+### Preajustes del sistema
+
+Haz clic en **Preajustes de efecto** en la cabecera del efecto para ajustar el medidor a un estándar conocido en un solo paso. Un preajuste que cambia **Mode** reinicia la medición; al pasar de un preajuste de Loudness a otro, la medición continúa.
+
+- **Studio VU (-18 dBFS)** - VU con 0 VU en -18 dBFS, la alineación de estudio habitual (EBU R68). Adecuado para grabaciones con mucho margen (headroom).
+- **SMPTE VU (-20 dBFS)** - VU con 0 VU en -20 dBFS (SMPTE RP 155), la práctica de los estudios y la radiodifusión de Norteamérica.
+- **Hot VU (-14 dBFS)** - La configuración predeterminada: VU con 0 VU en -14 dBFS, adecuada para la mayoría de las grabaciones comerciales terminadas.
+- **Loud Master VU (-8 dBFS)** - VU con 0 VU en -8 dBFS, para CD modernos y másteres de pop con la sonoridad llevada al máximo, que de otro modo mantendrían la aguja en el tope de la escala.
+- **DIN PPM** - El medidor DIN (**Attack** de 5 ms, caída de 20 dB en 1,5 s, escala DIN) con la marca -9 en -18 dBFS, de modo que el 0 queda en -9 dBFS. La escala llega hasta -50.
+- **BBC PPM** - El medidor BBC (**Attack** de 10 ms, caída de 24 dB en 2,8 s, escala BBC) con la marca 4 en -18 dBFS, de modo que la marca 6 queda en -10 dBFS.
+- **Nagra Modulometer** - El modulómetro de los magnetófonos Nagra (**Attack** de 7,5 ms, escala en dB de -30 a +5 dB) con 0 dB en -18 dBFS. **Release** usa el valor DIN de 1,5 s.
+- **K-20** - El K-System de Bob Katz en un medidor RMS, con 0 en -20 dBFS y una escala que baja hasta -60 dBFS. Para grabaciones con dinámica amplia.
+- **K-14** - Igual, con 0 en -14 dBFS y la escala hasta -60 dBFS. Para la música pop habitual.
+- **K-12** - Igual, con 0 en -12 dBFS y la escala hasta -60 dBFS. Para material muy comprimido pensado para radiodifusión.
+- **Digital Peak** - Un medidor de pico digital estándar (IEC 60268-18) de -60 a 0 dBFS, con retención de pico de 2 s.
+- **True Peak Clip Watch** - True Peak ampliado a los 20 dB superiores de la escala, con la retención de pico más larga (10 s), para detectar picos por encima de 0 dBFS tras cambiar la EQ o la ganancia.
+- **EBU R128 (-23 LUFS)** - Loudness con el objetivo de la radiodifusión europea y la escala EBU +9.
+- **EBU R128 +18 Scale** - El mismo objetivo con la escala EBU +18, más amplia, para música clásica y otro material con dinámica amplia.
+- **TV (-24 LKFS)** - Loudness con el objetivo de -24 LKFS que se usa en la televisión de EE. UU. (ATSC A/85) y Japón (ARIB TR-B32).
+- **Streaming (-14 LUFS)** - Loudness con un objetivo de -14 LUFS, cercano a la normalización de volumen de muchos servicios de streaming musical, y la aguja Short-term, más tranquila.
+- **Streaming (-16 LUFS)** - Loudness con el objetivo de -16 LUFS recomendado para streaming y pódcasts (AES TD1008), y la aguja Short-term.
+
+### Parámetros
+
+Solo se muestran los controles que se aplican al **Mode** seleccionado.
+
+- **Mode** - Selecciona el tipo de medidor: **VU** (predeterminado), **PPM**, **RMS**, **Sample Peak**, **True Peak** o **Loudness**. Cada modo mueve la aguja de forma distinta y usa su propia escala (consulta Cómo leer la visualización). Cambiar el modo reinicia la medición.
+- **Integration** (RMS; de 0,05 a 3 s; predeterminado: 0,3 s) - Define el tiempo de promediado. Los valores más largos dan una aguja más estable y lenta; los más cortos siguen los cambios con mayor rapidez.
+- **Attack** (PPM; de 1 a 20 ms; predeterminado: 5 ms) - Define la rapidez con la que sube la aguja en modo PPM, expresada como la duración de una ráfaga de tono que se lee 2 dB por debajo de un tono constante. Los valores más cortos muestran los picos breves más cerca de su nivel real; los más largos hacen que los picos breves se lean más bajos. 5 ms coincide con el medidor DIN.
+- **Release** (PPM, Sample Peak, True Peak; de 0,1 a 5 s; predeterminado: 1,5 s) - Define el tiempo que tarda la aguja en caer 20 dB tras un pico. Los valores más largos facilitan la lectura de los picos; los más cortos siguen la música con mayor precisión. 1,5 s coincide con el medidor DIN y con el medidor de pico digital estándar.
+- **Reference** (VU, PPM, RMS; de -30 a 0 dBFS; predeterminado: -14 dBFS) - Define el nivel digital que coincide con la marca de referencia del medidor. El valor predeterminado se adapta a la mayoría de las grabaciones comerciales terminadas; con las alineaciones de estudio de -18 o -20 dBFS (consulta Preajustes del sistema), un CD corriente suele mantener la aguja cerca del tope de la escala. Súbelo cuando las grabaciones intensas lleven la aguja al tope de la escala; bájalo cuando las grabaciones tranquilas apenas la muevan.
+- **Range** (PPM con la escala DIN o dB, RMS, Sample Peak, True Peak; de 20 a 60 dB; predeterminado: 40 dB) - Define hasta dónde llega la escala hacia abajo. Ámplialo para ver pasajes tranquilos; redúcelo para repartir mejor la parte superior de la escala.
+- **PPM Scale** (PPM; predeterminado: DIN) - Selecciona la escala del PPM: **DIN**, **BBC** o **dB** (consulta Cómo leer la visualización).
+- **Peak Hold** (PPM, RMS, Sample Peak, True Peak; de 0 a 10 s; predeterminado: 1 s) - Define cuánto tiempo permanece la marca de pico en la lectura más alta reciente y cuánto tiempo sigue encendido el indicador over. Con 0 se desactiva la marca y el indicador over permanece encendido 1 s.
+- **Needle** (Loudness; predeterminado: Momentary) - Selecciona qué muestra la aguja. **Momentary** sigue la sonoridad de los últimos 0,4 s; **Short-term** muestra los últimos 3 s y se mueve con más calma.
+- **Target** (Loudness; de -36 a -10 LUFS; predeterminado: -23 LUFS) - Define la sonoridad marcada en la escala y dispone la escala tomando ese valor como referencia. -23 LUFS es el nivel de radiodifusión de EBU R128; muchos servicios de streaming usan valores cercanos a -14 LUFS.
+- **Scale** (Loudness; predeterminado: EBU +9) - Selecciona la amplitud de la escala de sonoridad. **EBU +9** cubre de 18 LU por debajo a 9 LU por encima de **Target**; **EBU +18** cubre de 36 LU por debajo a 18 LU por encima, lo que conviene a música con dinámica amplia o material muy intenso.
+
+### Cómo leer la visualización
+
+- Cada canal tiene su propio medidor, hasta cuatro por fila y hasta 16 canales.
+- Los niveles siguen la convención digital habitual de que una onda sinusoidal a plena escala se lee como 0 dBFS, así que una onda sinusoidal constante da la misma lectura en todos los modos excepto Loudness.
+- Los modos difieren en la rapidez con la que se mueve la aguja:
+
+| Modo | Movimiento de la aguja | Escala |
+|---|---|---|
+| VU | Lento. Alcanza un nuevo nivel en unos 0,3 s y muestra el nivel medio (IEC 60268-17). | De -20 a +3 VU. 0 VU = **Reference**. |
+| PPM | Una aproximación basada en IEC 60268-10. Sube rápidamente a la velocidad fijada por **Attack**; con el valor predeterminado de 5 ms, una ráfaga de 10 ms se lee aproximadamente 1 dB por debajo de un tono continuo, como en un medidor DIN. Cae 20 dB en el tiempo de **Release**. | Se elige con **PPM Scale**. **DIN**: la marca -9 = **Reference**, así que 0 queda 9 dB por encima. **BBC**: marcas de 1 a 7, con 4 dB entre las marcas de 2 a 7 y 6 dB entre 1 y 2; la marca 4 = **Reference**. **dB**: la marca 0 = **Reference**, desde **Range** por debajo de ella hasta +5 dB. |
+| RMS | Muestra la potencia media durante el tiempo de **Integration**, sin suavizado adicional. | La marca 0 = **Reference**. |
+| Sample Peak | Salta de inmediato al valor de muestra más alto. | El tope de la escala = 0 dBFS. |
+| True Peak | Como Sample Peak, pero también estima los picos entre muestras. Puede leer por encima de 0 dBFS; esos picos pueden recortar en un DAC o durante la conversión. | El tope de la escala = 0 dBFS. |
+| Loudness | Muestra la sonoridad en LUFS según ITU-R BS.1770 y EBU R128. | Definida por **Target** y **Scale**; las lecturas se muestran en LUFS. |
+
+- La marca de pico muestra la lectura más alta reciente durante el tiempo de **Peak Hold**. El indicador over se enciende cuando el nivel supera 0 dBFS y permanece encendido durante el tiempo de **Peak Hold**, o 1 s si **Peak Hold** es 0.
+- En el modo Loudness, el primer medidor muestra el programa completo. Su aguja sigue el ajuste de **Needle** y muestra Momentary (M), Short-term (S), Integrated (I), Loudness Range (LRA), el máximo True Peak y el tiempo de medición transcurrido, junto con un botón **Reset**. Integrated y LRA aparecen cuando se ha medido suficiente audio.
+  - Para mono, estéreo y 5.1 (orden de canales L, R, C, LFE, Ls, Rs), estos valores siguen la ponderación de canales estándar. Para otros números de canales, todos los canales se suman con el mismo peso, por lo que los valores son solo de referencia.
+  - Los medidores siguientes muestran cada canal por separado. Son valores de referencia, medidos sin ponderación de canales ni puerta.
+- Integrated, LRA y el máximo True Peak siguen acumulándose hasta que pulsas **Reset**, cambias **Mode**, cambia la frecuencia de muestreo o el número de canales, o se reinicia el procesamiento de audio.
+- El tiempo en que el procesamiento está en pausa no se mide: durante las pausas de ahorro de energía en silencio, mientras Master Bypass está activado o Analog Meter está desactivado, o mientras Effect Pipeline no está visible (por ejemplo, en la Biblioteca musical, con la ventana minimizada o en el Reproductor mini) y **Omitir el DSP de visualización cuando esté oculto** está activado en Configuración (lo está de forma predeterminada). Las lecturas continúan desde donde se detuvieron.
 
 ## Chroma Spiral
 
@@ -49,6 +121,9 @@ Muestra en qué notas y octavas se sitúan los componentes de frecuencia de la m
 - El brillo y el área de los puntos, así como la extensión de la zona coloreada, muestran intensidad relativa, no un nivel absoluto: la escala sigue los picos recientes.
 - En las octavas graves, las notas próximas se distinguen peor y la respuesta es más lenta; pueden verse mezcladas.
 
+### Visualización
+- Pasa el cursor sobre la pantalla, o tócala y desliza el dedo sobre ella, para leer los valores en ese punto.
+
 ## Level Meter
 
 Una visualización que muestra en tiempo real el nivel de señal digital de tu música. Te ayuda a revisar los niveles después de aplicar efectos y a detectar posibles recortes antes de que se vuelvan distorsión audible.
@@ -78,6 +153,9 @@ Muestra las frecuencias fundamentales (F0) estimadas de A0 a C8 en un piano roll
 - Las líneas guía de las octavas y de E–F se dibujan detrás de las barras de volumen, para que la cuadrícula de alturas siga sirviendo de referencia visual.
 - Las teclas pasan gradualmente de su color habitual al color de visualización a medida que aumenta la confianza del último fotograma, hasta alcanzar ese color con un valor de 1.
 - Cambiar **Color** actualiza los colores del historial existente.
+
+### Visualización
+- Pasa el cursor sobre la pantalla, o tócala y desliza el dedo sobre ella, para leer los valores en ese punto.
 
 ### Qué Puedes Ver
 
@@ -115,6 +193,9 @@ Muestra la forma de la onda sonora en tiempo real para que puedas ver golpes, at
 - Las líneas de cuadrícula ayudan a medir valores de tiempo y amplitud
 - Los ajustes de Trigger determinan dónde empieza la captura de la forma de onda; no se muestra un marcador aparte
 
+### Visualización
+- Pasa el cursor sobre el gráfico, o tócalo y desliza el dedo sobre él, para leer los valores en ese punto.
+
 ### Parámetros
 - **Display Time** - Cuánto tiempo mostrar (1 a 100 ms)
   - Valores más bajos: Ver más detalle en eventos más cortos
@@ -122,6 +203,7 @@ Muestra la forma de la onda sonora en tiempo real para que puedas ver golpes, at
 - **Trigger Mode**
   - Auto: Actualizaciones continuas incluso sin disparo
   - Normal: Congela la visualización hasta el siguiente disparo
+  - Off: Sin disparo; muestra continuamente la forma de onda más reciente. Trigger Level, Trigger Edge y Holdoff no tienen efecto
 - La detección del disparo usa el promedio de los canales izquierdo y derecho. La entrada mono se usa directamente.
 - **Trigger Level** - Nivel de amplitud que inicia la captura
   - Rango: -1 a 1 (amplitud normalizada)
@@ -147,6 +229,9 @@ Sigue una frecuencia fundamental (F0) cada vez en un piano roll móvil de dos se
 - La etiqueta actual muestra la nota más cercana y la diferencia en cents. Un valor positivo indica una altura superior y uno negativo, inferior. La etiqueta desaparece cuando no hay una estimación fiable.
 - El nombre de la nota usa los mismos colores que Note Spectrogram. El tamaño del nombre y la diferencia en cents se adapta al ancho disponible, y el punto decimal de los cents mantiene una posición fija.
 
+### Visualización
+- Pasa el cursor sobre la pantalla, o tócala y desliza el dedo sobre ella, para leer los valores en ese punto.
+
 ### Guía de Uso
 
 - Empieza con una sola nota sostenida y observa si la línea permanece centrada o se desplaza hacia agudo o grave.
@@ -161,6 +246,75 @@ Sigue una frecuencia fundamental (F0) cada vez en un piano roll móvil de dos se
 - **Lowest Note** - Define el límite inferior del intervalo mostrado y analizado. Valor predeterminado: C2. El ajuste más bajo es A0.
 - **Highest Note** - Define el límite superior del intervalo mostrado y analizado. Valor predeterminado: C7. El ajuste más alto es C8.
 - La entrada estéreo se analiza promediando los dos primeros canales; la entrada mono se usa directamente. El contenido con polaridad muy opuesta puede cancelarse al promediar y dejar la gráfica sin trazo.
+
+## Rhythm Analyzer
+
+Calcula el tempo de tu música y muestra, pulso a pulso, dónde caen los golpes de batería e instrumentos y cuánto se adelanta o se retrasa cada parte, sin modificar el sonido salvo que **Metronome Click** esté activado. Sirve para averiguar el BPM de un tema, comprobar cuánto swing tiene un groove, ver si la caja suena por detrás del tiempo, o localizar dónde entra un fill o cambia un patrón.
+
+### Guía de Uso
+
+- **Comprueba el tempo**: reproduce un tema con un pulso claro y estable. En unos segundos, el encabezado muestra el BPM con **LOCKED**, y la franja del tempograma marca ese mismo tempo como **adopted**. El analizador a veces sigue un nivel de pulso distinto al que marcas con el pie, así que fíjate también en **×½**, **×2** y **strongest** en el encabezado: si alguno coincide con tu pie, ese es el tempo que sientes.
+- **Escucha dónde cae el pulso**: activa **Metronome Click** para oír un clic en cada tiempo detectado. Si los clics coinciden con el pulso que marcas con el pie, el analizador ha encontrado el pulso correcto. Si caen entre los tiempos que marcas con el pie, o al doble o a la mitad de tu velocidad, el analizador sigue una posición o un nivel de pulso distinto; consulta **Corrige un bloqueo al doble o a la mitad de tempo** más abajo y **Limitaciones**.
+- **Colócalo al final al usar el clic**: el clic se mezcla en el audio que sale del analizador, así que cualquier efecto posterior también lo procesa. Coloca Rhythm Analyzer al final de la cadena de efectos mientras escuchas con el clic activado.
+- **Desactiva el clic antes de procesar archivos**: con **Metronome Click** activado, los clics se graban en cualquier archivo que proceses. Desactívalo antes.
+- **Corrige un bloqueo al doble o a la mitad de tempo**: si una balada lenta se bloquea al doble de su tempo, baja **Max BPM** por debajo de ese valor (por ejemplo, a 100 para una balada de 60 BPM). Si un tema rápido se bloquea a la mitad de velocidad, sube **Min BPM** por encima de ese valor. El análisis se reinicia con el nuevo rango.
+- **Lee un groove estable**: con música programada o tocada con clic, los puntos se sitúan cerca del centro de sus carriles y **jitter** se mantiene cerca de 0 ms. Cuando una parte suena sistemáticamente por detrás o por delante de las demás, sus puntos quedan por encima o por debajo del centro del carril en las mismas posiciones cada vez. Una caja que llega 15 ms detrás del bombo y el hi-hat, por ejemplo, aparece como puntos Mid por encima del centro del carril en los tiempos 2 y 4, y como una marca Mid etiquetada +15 en la columna **1** de la lente de tiempos.
+- **Lee el swing**: **swing** muestra cuánto se retrasa el contratiempo: 1.00:1 es recto, 2.00:1 es un shuffle de tresillo completo, y los valores intermedios son un swing más ligero. En música claramente swingueada, la lente de tiempos coloca los golpes del contratiempo en la columna **⅔** en lugar de **&**.
+- **Localiza fills y cambios de sección**: un anillo marca un golpe que esa misma banda no tocó en la misma posición uno o dos intervalos antes. Mientras se repite un patrón aparecen pocos anillos; un fill o los primeros compases de una nueva sección muestran muchos. Las filas de eco, debajo de los carriles principales, te permiten comparar el nuevo patrón con los anteriores.
+- **Cuando aparece searching**: mientras el pulso no está claro, el encabezado muestra **searching** con el último tempo bloqueado entre paréntesis, los carriles siguen desplazándose a ese tempo dentro de una banda sombreada, y los golpes se dibujan como círculos huecos sin desfase medido. El analizador se bloquea cuando ha estado seguro del pulso durante un tiempo completo. Con un pulso claro y estable, esto tarda unos segundos; la música clásica y la tocada con rubato pueden tardar más. Cuando la música se detiene, el analizador deja de mostrar el pulso en menos de medio segundo y vuelve a bloquearse cuando la música regresa.
+
+### Parámetros
+
+- **Min BPM** (40 a 192; 40 predeterminado) - Fija el tempo más bajo al que puede bloquearse el analizador. Súbelo cuando el analizador se bloquea a la mitad del tempo que sientes.
+- **Max BPM** (50 a 240; 240 predeterminado) - Fija el tempo más alto al que puede bloquearse el analizador. Bájalo cuando el analizador se bloquea al doble del tempo que sientes. El analizador solo se bloquea a tempos comprendidos entre **Min BPM** y **Max BPM**, pero el tempo mostrado puede salirse ligeramente de ese rango cuando la música acelera o se ralentiza. **Max BPM** se mantiene siempre al menos 1,25 veces **Min BPM**; cuando un cambio rompería esta relación, el otro límite se desplaza automáticamente. Cambiar cualquiera de los dos reinicia el análisis. La franja del tempograma siempre cubre de 30 a 480 BPM, y las líneas **×½** y **×2** pueden caer fuera del rango elegido.
+- **Metronome Click** (activado o desactivado; desactivado predeterminado) - Añade un clic breve y agudo en cada tiempo detectado al audio que pasa por la unidad. Los clics solo suenan mientras el analizador está bloqueado y se detienen al volver a **searching**. El clic tiene un nivel fijo de unos −10 dBFS y se añade a los canales 1 y 2 (canal 1 para entrada mono); los demás canales no cambian. Cuando está desactivado, el audio pasa sin cambios. Activarlo o desactivarlo no reinicia el análisis.
+- **Span (beats)** (4, 6, 8, 12 o 16; 8 predeterminado) - Fija cuántos tiempos muestran los carriles principales y cada fila de eco, y hasta dónde retroceden los anillos al comparar. Solo cambia la visualización, no el análisis. Un valor que cubre compases completos alinea un patrón que se repite entre las filas de eco, por ejemplo 8 para dos compases de 4/4 o 6 para dos compases de 3/4.
+- **Tempogram**, **Timing lanes**, **Echo rows**, **Beat lens** (activado o desactivado; activado predeterminado) - Muestran u ocultan la franja del tempograma, los carriles principales, las filas de eco y la lente de tiempos. Los paneles restantes crecen para ocupar el espacio, y el encabezado siempre se muestra. Ocultar un panel solo cambia la visualización: el análisis continúa, y el panel vuelve a mostrar todo su historial cuando lo reactivas.
+
+### Guía de Visualización
+
+La pantalla tiene cinco partes: el encabezado, la franja del tempograma, los carriles principales, las filas de eco y la lente de tiempos. En una pantalla ancha, la lente de tiempos se sitúa a la derecha de los carriles; en una pantalla alta, todas las partes se apilan de arriba abajo. Al ocultar paneles con sus casillas, los paneles restantes ocupan el espacio; el encabezado siempre permanece. Los golpes se clasifican en tres bandas: **Low** (bombo y bajo), **Mid** (caja, voces y la mayoría de los instrumentos) y **High** (hi-hats y platillos). Todas las bandas comparten un mismo color; en los carriles, las filas de eco y la lente de tiempos, cada banda tiene su propia fila, con **High** arriba y **Low** abajo. Los nombres de los ejes, los valores de las marcas y las etiquetas de fila **High**, **Mid** y **Low** se dibujan sobre los gráficos. La pantalla solo cuenta tiempos; no detecta compases ni el tiempo 1.
+
+- **Encabezado**:
+  - El piloto de pulso a la izquierda del BPM se enciende en cada tiempo que predice el analizador y luego se apaga rápidamente, para que veas el pulso que sigue; **Metronome Click** suena en los mismos tiempos. Todos los tiempos se encienden igual, porque el analizador no sabe dónde empieza un compás. Mientras el analizador busca el pulso, el piloto es un anillo hueco.
+  - El BPM y **LOCKED** mientras el analizador sigue un pulso. Mientras no ha encontrado ninguno, muestra **searching**, con el último tempo bloqueado como **(N BPM held)**.
+  - **×½** y **×2** - La mitad y el doble del tempo mostrado.
+  - **strongest** - El tempo que en ese momento se repite con más fuerza en la música. Suele coincidir con el tempo bloqueado; cuando difiere, es una alternativa probable.
+  - **swing** - La proporción entre la primera y la segunda mitad de un tiempo, a partir de la posición típica del contratiempo en los últimos 32 tiempos. 1.00:1 es recto y 2.00:1 es un shuffle de tresillo.
+  - **jitter** - La dispersión aleatoria típica de los golpes alrededor de su posición media en la lente de tiempos, en ms. Las partes ajustadas y programadas marcan cerca de 0; una interpretación más suelta marca más alto.
+  - Una leyenda de los símbolos: **○ no beat lock**, **◎ new vs N / 2N beats ago**, y **beat re-aligned** para la línea discontinua.
+  - Un valor que todavía no está disponible se muestra como —.
+- **Franja del tempograma**: muestra los últimos 20 segundos, con **Time** avanzando de izquierda a derecha y **Tempo (BPM)** en una escala logarítmica de 30 a 480, con sus valores en el borde izquierdo. El brillo indica con qué claridad se repite la música a cada tempo: solo una repetición clara y fuerte se ve brillante, una repetición débil o poco clara queda tenue y el silencio se mantiene oscuro. Los tempos relacionados, como la mitad y el doble del pulso, suelen aparecer como líneas más tenues. Mientras el analizador está bloqueado, una línea continua muestra el tempo bloqueado, y unas líneas discontinuas muestran su mitad y su doble; sus etiquetas **adopted**, **×2** y **×½** están en el borde derecho, justo encima de cada línea. Estas líneas se vuelven más tenues cuando el analizador está menos seguro del pulso.
+- **Carriles principales**: los tiempos más recientes, tantos como fije **Span (beats)**, con el más reciente en el borde derecho; el rótulo dice **Last N beats**. Unas líneas continuas los dividen en tres gráficos de desfase, un carril por banda con su nombre en el borde izquierdo, con **Beats** en el eje horizontal y **Timing (ms)** en el vertical. Las líneas verticales marcan los tiempos, y las líneas más tenues las corcheas; solo se dibujan donde el analizador estaba bloqueado. Cada punto es un golpe detectado, unido al centro del carril por un trazo vertical; cuanto más grande es el punto, más seguro está el analizador de ese golpe.
+  - La altura de un punto en su carril indica su desfase: por encima del centro del carril (0 ms) va retrasado; por debajo, adelantado. Unas líneas de puntos marcadas **+20** y **−20** señalan ±20 ms, y los golpes que superan ±30 ms se quedan en el borde del carril. El desfase se mide desde la semicorchea o la posición de tresillo más cercana, según la cuadrícula que siga la música, y se muestra en relación con el desfase típico de los 16 tiempos anteriores. Por eso un retraso constante compartido por todas las partes no se muestra; los carriles indican cómo difiere cada golpe del promedio reciente.
+  - Un círculo hueco es un golpe sin bloqueo de pulso. Se sitúa en el centro del carril porque no tiene desfase medido.
+  - Un anillo alrededor de un punto marca un golpe que esa misma banda no tocó en la misma posición uno o dos intervalos antes. Los anillos aparecen a partir de un intervalo después de un bloqueo o una realineación.
+  - Una banda sombreada etiquetada **searching** marca el periodo sin bloqueo de pulso.
+  - Una línea discontinua marca dónde se realineó la cuadrícula del pulso sin perder el bloqueo, cuando el analizador cambió a un nuevo tempo o desplazó la posición del pulso. La lente de tiempos, el swing y el jitter se reinician desde ese punto.
+- **Filas de eco**: ciclos de tantos tiempos como fije **Span (beats)**, apilados con el más reciente arriba y separados por líneas. El eje horizontal es **Beats**, y el vertical, **Cycles ago**, numera cada fila. Mientras se muestran los carriles principales, las filas empiezan un ciclo atrás, en 1, y el rótulo dice **Previous N-beat cycles**. Con los carriles principales ocultos, la fila superior es el ciclo actual, en 0, el rótulo dice **Recent N-beat cycles** y, si hay espacio, esa fila lleva los nombres de las bandas. Como los tiempos se alinean verticalmente, un patrón que se repite cada ciclo forma columnas verticales, y un cambio las rompe. Las filas de eco muestran la banda de cada golpe, con **High** arriba y **Low** abajo dentro de cada fila, pero no su desfase. Los círculos huecos, los anillos, el sombreado y las líneas discontinuas tienen el mismo significado que en los carriles principales.
+- **Lente de tiempos**: resume los desfases de los últimos 32 tiempos desde el bloqueo o la realineación actual. Las columnas son posiciones dentro de un tiempo, sobre el eje **Position in beat**: **1** (en el tiempo), **e**, **&** y **a** para semicorcheas, y **⅓** y **⅔** para tresillos. Cada banda tiene su propia fila, con su nombre en el borde izquierdo.
+  - La marca vertical muestra cuánto se adelanta (izquierda) o se retrasa (derecha) esa banda en esa posición, en promedio. La escala superior cubre ±30 ms, con marcas en ±20 ms. La barra sombreada alrededor de la marca muestra la dispersión (± una desviación estándar). Una marca más opaca indica que esa posición suena con más frecuencia; una posición necesita al menos cuatro golpes para aparecer.
+  - Cuando se actualizan los valores, las marcas y el ancho de las barras cambian suavemente hacia los nuevos valores, cada vez más despacio a medida que se acercan a ellos.
+  - Los desfases se miden respecto al conjunto: si todo suena junto, cada marca queda en el centro. La lente muestra cómo difieren las partes entre sí.
+  - Los desfases de 3 ms o más se etiquetan en ms. Los desfases menores se dibujan sin etiqueta, porque los desfases entre bandas por debajo de unos 3 ms no se pueden medir de forma fiable.
+  - Mientras el analizador no está bloqueado, la lente muestra **waiting for a steady beat**.
+- **LOCKED** y la opacidad de las líneas de tempo muestran cuán seguro está el analizador del pulso, no lo ajustada que está la interpretación. La imprecisión rítmica solo se refleja en la altura de los puntos, **jitter** y las barras de la lente.
+- El botón **Reset** borra la pantalla y reinicia el análisis, por ejemplo al cambiar a otro tema.
+- La entrada estéreo se analiza promediando los dos primeros canales; la entrada mono se usa directamente.
+
+### Visualización
+- Pasa el cursor sobre la pantalla, o tócala y desliza el dedo sobre ella, para leer los valores en ese punto. En los carriles y las filas de eco, la lectura muestra hace cuántos tiempos ocurrió el punto, y la banda y el desfase del golpe más cercano (— para un círculo hueco). En la franja del tempograma muestra el tempo y el momento bajo el cursor, **Salience** (con qué fuerza se repite la música a ese tempo; 100% significa una repetición clara y fuerte) y el tempo adoptado, **Adopted**; en la lente de tiempos, el desfase y la dispersión de cada banda en esa posición.
+
+### Limitaciones
+
+- La precisión puede disminuir en canciones con grandes variaciones de tempo, sin sección rítmica o interpretadas con instrumentos acústicos. La música tranquila con tempo libre y sin percusión, la música ambient y los sonidos sostenidos se quedan en **searching**. Algunas grabaciones expresivas, como el piano solo o las interpretaciones de música clásica, no llegan a bloquearse nunca.
+- El analizador puede asentarse en un nivel de pulso distinto al que elegiría un oyente, y entonces el piloto y el clic pueden ir al doble, a la mitad, a dos tercios o a una vez y media el tempo que sientes. En la música clásica, en la tocada con rubato y en alguna otra, además, tarda más en bloquearse y salta brevemente a otro nivel con más frecuencia que en la música de pulso estable. **×½**, **×2** y **strongest** muestran tempos alternativos probables. Si el tempo detectado o la posición del pulso no coinciden con lo que oyes, prueba a acotar el rango con **Min BPM** y **Max BPM** alrededor del tempo esperado y vuelve a escuchar.
+- Con patrones rítmicos escasos, del tipo de la clave, el pulso puede bloquearse en el contratiempo.
+- Cuando el tempo cambia de forma continua, como en una aceleración gradual o un rubato libre, el pulso lo sigue con un pequeño retraso, así que el clic puede sonar algo adelantado o retrasado hasta que el tempo se estabiliza.
+- En algunos temas de tempo estable, la posición del pulso se realinea ocasionalmente, como muestra la línea discontinua, aunque la música no haya cambiado.
+- En mezclas densas y grabaciones ruidosas, los carriles **Mid** y **High** muestran más puntos donde en realidad no sonó ningún instrumento. El carril **Low** pasa por alto algunas notas graves del piano.
+- No hay detección de compás ni de métrica: la pantalla se organiza solo por tiempos y no muestra dónde empieza un compás.
+- El análisis completo funciona a 8; 11,025; 16; 22,05; 24; 32; 44,1; 48; 88,2; 96; 176,4; 192; 352,8 y 384 kHz. A cualquier otra frecuencia de muestreo, como 64 kHz, el analizador usa un método más simple: el pulso y los golpes son menos precisos, y cuando la música se detiene, el pulso sigue mostrándose durante varios segundos.
 
 ## Spectrogram
 
@@ -177,6 +331,9 @@ El gráfico se desplaza de derecha a izquierda a una velocidad constante, con ma
   - Abajo: Sonidos graves
   - Medio: Instrumentos principales
   - Arriba: Frecuencias altas
+
+### Visualización
+- Pasa el cursor sobre la pantalla, o tócala y desliza el dedo sobre ella, para leer los valores en ese punto.
 
 ### Lo Que Puedes Ver
 - Melodías: Líneas fluidas de color
@@ -212,6 +369,9 @@ Crea una visualización en tiempo real de las frecuencias de tu música, desde g
 - En la visualización **Bar**, cada barra muestra el nivel más alto en una parte de igual ancho de la pantalla. **Log** y **Log (HQ)** usan anchos de octava iguales; **Linear** usa anchos de frecuencia iguales.
 - La marca fina sobre una barra muestra su pico reciente y desciende suavemente.
 - Observa cómo diferentes instrumentos crean diferentes patrones
+
+### Visualización
+- Pasa el cursor sobre el gráfico, o tócalo y desliza el dedo sobre él, para leer los valores en ese punto.
 
 ### Lo Que Puedes Ver
 - Caídas de Graves: Grandes movimientos a la izquierda

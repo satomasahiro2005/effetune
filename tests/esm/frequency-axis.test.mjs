@@ -21,7 +21,8 @@ const files = {
   SpectrumAnalyzerPlugin: 'analyzer/spectrum_analyzer', SpectrogramPlugin: 'analyzer/spectrogram',
   ChromaSpiralPlugin: 'analyzer/chroma_spiral',
   NoteSpectrogramPlugin: 'analyzer/note_spectrogram', PitchMeterPlugin: 'analyzer/pitch_meter',
-  PhaseSelectEqPlugin: 'spatial/phase_select_eq'
+  PhaseSelectEqPlugin: 'spatial/phase_select_eq',
+  TonalBalanceEQPlugin: 'eq/tonal_balance_eq'
 };
 
 test('all frequency axes match plugin selectors and coordinate definitions', () => {
@@ -72,6 +73,61 @@ test('Chroma pointer coordinates follow C, A and adjacent spiral turns at each g
   }
 });
 
+test('Tonal Balance preview follows the rendered band-centre axis and target-adjust handles', () => {
+  const labels = new Map();
+  const ctx = new Proxy({
+    measureText: () => ({ width: 20 }),
+    fillText: (label, x) => labels.set(label, x)
+  }, { get: (object, key) => object[key] ?? (() => {}) });
+  const element = () => ({ append() {}, appendChild() {}, addEventListener() {}, setAttribute() {} });
+  const canvas = { ...element(), width: 640, height: 256, getContext: () => ctx };
+  const sandbox = {
+    window: {}, console, document: { createElement: element },
+    PluginBase: class {
+      registerProcessor() {}
+      registerUIRefresh() {}
+      isGraphPointerActive() { return false; }
+      createSelectControl() { return element(); }
+      createParameterControl() { return element(); }
+      createResponsiveGraph() { return { canvas, container: element(), dispose() {} }; }
+    }
+  };
+  for (const file of ['room_eq', 'tonal_balance_eq']) {
+    vm.runInNewContext(fs.readFileSync(new URL(`../../plugins/eq/${file}.js`, import.meta.url), 'utf8'), sandbox);
+  }
+  const createEditor = sandbox.window.RoomEqPlugin.createAdditionalEqEditor;
+  sandbox.window.RoomEqPlugin.createAdditionalEqEditor = options => {
+    const editor = createEditor(options);
+    editor.createUI = element;
+    editor.updateMarkers = () => {};
+    return editor;
+  };
+  const plugin = new sandbox.window.TonalBalanceEQPlugin();
+  plugin.createAveragingTimeControl = element;
+  plugin.syncControlStates = () => {};
+  plugin.createUI();
+  const target = axes.targets.get('TonalBalanceEQPlugin');
+  const centres = [0, 40].map(band => (10 ** ((band + 1) / 21.4) - 1) * 1000 / 4.37);
+  for (const [width, height] of [[306, 230], [640, 256], [1024, 410]]) {
+    Object.assign(canvas, { width, height });
+    labels.clear();
+    plugin.drawGraph();
+    const axis = axes.getAxis(plugin, target, { width, height });
+    for (const [label, frequency] of [['50', 50], ['100', 100], ['1k', 1000], ['10k', 10000]]) {
+      const renderedX = labels.get(label);
+      assert.ok(Number.isFinite(renderedX), `${width}: ${label} tick rendered`);
+      assert.ok(Math.abs(axis.toFreq(renderedX) / frequency - 1) < 1e-10, `${width}: ${label} preview`);
+      assert.ok(Math.abs(axis.toPos(frequency) - renderedX) < 1e-9, `${width}: ${label} preview cursor`);
+    }
+    for (const frequency of [...centres, 100, 440, 1000, 10000]) {
+      const handleX = plugin._adjustEditor.freqToX(frequency) / 100 * width;
+      assert.ok(Math.abs(axis.toFreq(handleX) / frequency - 1) < 1e-10, `${width}: ${frequency} handle`);
+    }
+    assert.ok(Math.abs(axis.toFreq(-1) / centres[0] - 1) < 1e-10);
+    assert.ok(Math.abs(axis.toFreq(width + 1) / centres[1] - 1) < 1e-10);
+  }
+});
+
 test('logarithmic, linear and vertical coordinates round trip and clamp', () => {
   for (const scale of ['log', 'linear']) {
     for (const orientation of ['x', 'y']) {
@@ -103,20 +159,30 @@ test('note-axis keys follow the rendered equal white-key geometry and black prio
   assert.equal(axes.hitKey(keys, 12, 5, 45, 28).midi, 61);
   assert.equal(axes.hitKey(keys, 12, 35, 45, 28).midi, 60);
   assert.equal(axes.hitKey(keys, 120, 35, 45, 28).midi, 71);
-  for (const [name, gutter, markers] of [
-    ['NoteSpectrogramPlugin', 44.8, ['MULTI_F0_KEY_GUTTER_CSS_PX = 28;', 'MULTI_F0_KEY_GUTTER_CSS_PX * 1.6']],
-    ['PitchMeterPlugin', 45, ['PITCH_METER_KEY_GUTTER_CSS_PX = 45;', 'PITCH_METER_BLACK_KEY_DEPTH_CSS_PX = 28;']]
-  ]) {
+  for (const name of ['NoteSpectrogramPlugin', 'PitchMeterPlugin']) {
     const source = fs.readFileSync(new URL(`../../plugins/${files[name]}.js`, import.meta.url), 'utf8');
-    for (const marker of markers) assert.ok(source.includes(marker));
+    assert.ok(source.includes('keyboardDepths(12 * rowHeight, width'));
     for (const ly of ['Horizontal', 'Vertical']) {
       const axis = axes.getAxis({ mn: 60, mx: 71, rf: 442, ly }, axes.targets.get(name), { width: 120, height: 120 });
-      assert.equal(axis.gutter, gutter);
-      assert.equal(axis.blackDepth, 28);
+      assert.ok(Math.abs(axis.gutter - 120 * 150 / (7 * 23.5) / 2) < 1e-12);
+      assert.ok(Math.abs(axis.blackDepth - axis.gutter * 95 / 150) < 1e-12);
       const position = ly === 'Horizontal' ? 15 : 105;
       assert.equal(axis.toFreq(position), axes.noteFrequency(61, axis.a4));
       assert.ok(Math.abs(axis.toPos(axis.toFreq(position)) - position) < 1e-10);
-      assert.equal(axes.hitKey(axis.keys, position, 5, gutter, 28).midi, 61);
+      assert.equal(axes.hitKey(axis.keys, position, 5, axis.gutter, axis.blackDepth).midi, 61);
     }
   }
+});
+
+test('keyboards keep piano key proportions and leave room for the plot', () => {
+  // 23.5 mm white-key pitch, 150 mm white length and 95 mm black length, drawn at half
+  // length by default; a length scale of 2 gives the real proportion.
+  const whitePitch = 10;
+  const { gutter, blackDepth } = axes.keyboardDepths(7 * whitePitch, 1000);
+  assert.ok(Math.abs(gutter / whitePitch - 150 / 23.5 / 2) < 1e-12);
+  assert.ok(Math.abs(blackDepth / gutter - 95 / 150) < 1e-12);
+  const real = axes.keyboardDepths(7 * whitePitch, 1000, 2);
+  assert.ok(Math.abs(real.gutter / whitePitch - 150 / 23.5) < 1e-12);
+  assert.ok(Math.abs(real.blackDepth / real.gutter - 95 / 150) < 1e-12);
+  assert.equal(axes.keyboardDepths(7 * whitePitch, 40, 2).gutter, 20);
 });

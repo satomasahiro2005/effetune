@@ -428,11 +428,12 @@ jobs:
 
   dsp-library-macos-intel:
     name: DSP Library macOS Intel
-    needs: [scope, dsp-library-macos-arm]
+    needs: [scope, dsp-windows, dsp-library-windows]
     if: >-
       always() && !cancelled() &&
       needs.scope.outputs.dsp_library == 'true' &&
-      needs.dsp-library-macos-arm.result == 'success'
+      (needs.dsp-windows.result == 'success' || needs.dsp-windows.result == 'skipped') &&
+      needs.dsp-library-windows.result == 'success'
     uses: ./.github/workflows/dsp-library-ci.yml
     with:
       stage: macos-intel
@@ -441,10 +442,11 @@ jobs:
 
   dsp-library-acceptance:
     name: DSP Library acceptance
-    needs: [scope, dsp-library-macos-intel]
+    needs: [scope, dsp-library-macos-arm, dsp-library-macos-intel]
     if: >-
       always() && !cancelled() &&
       needs.scope.outputs.dsp_library == 'true' &&
+      needs.dsp-library-macos-arm.result == 'success' &&
       needs.dsp-library-macos-intel.result == 'success'
     uses: ./.github/workflows/dsp-library-ci.yml
     with:

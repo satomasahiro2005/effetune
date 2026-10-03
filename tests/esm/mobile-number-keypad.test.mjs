@@ -260,7 +260,7 @@ test('intercepts only enabled effect parameter number inputs on pointerdown', ()
 });
 
 test('defines a three-column, touch-sized mobile keypad overlay', async () => {
-  const css = await readFile(new URL('../../effetune-mobile.css', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../../css/effetune-mobile.css', import.meta.url), 'utf8');
   assert.match(css, /\.mobile-number-keypad-overlay\s*\{[^}]*position:\s*fixed;[^}]*touch-action:\s*none;/s);
   assert.match(css, /\.mobile-number-keypad-keys\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\);/s);
   assert.match(css, /\.mobile-number-keypad-button\s*\{[^}]*min-height:\s*48px;/s);

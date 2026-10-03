@@ -13,21 +13,54 @@ class TelemetryFrame:
     """Common metadata for a decoded analyzer observation."""
 
     kind: Literal[
+        "analogMeter",
         "level",
         "noteSpectrogram",
         "oscilloscope",
         "pitch",
+        "rhythmAnalyzer",
         "spectrum",
         "spectrumHq",
         "spectrogram",
         "spectrogramHq",
         "stereo",
+        "tonalBalance",
     ]
     effect_type: str
     effect_id: str | None
     effect_index: int
     sequence: int
     dropped: int
+
+
+@dataclass(frozen=True, slots=True)
+class AnalogMeterTelemetryChannel:
+    """Needle and maximum dB, or channel Momentary and Short-term LUFS in Loudness mode."""
+
+    needle_db: float
+    max_db: float
+
+
+@dataclass(frozen=True, slots=True)
+class AnalogMeterTelemetryProgram:
+    """Program loudness; integrated and lra are 0 until their validity flags are set."""
+
+    momentary: float
+    short_term: float
+    integrated: float
+    lra: float
+    max_true_peak: float
+    integrated_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class AnalogMeterTelemetryFrame(TelemetryFrame):
+    mode: int
+    channel_count: int
+    integrated_valid: bool
+    lra_valid: bool
+    channels: tuple[AnalogMeterTelemetryChannel, ...]
+    program: AnalogMeterTelemetryProgram | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +124,42 @@ class PitchMeterTelemetryFrame(TelemetryFrame):
 
 
 @dataclass(frozen=True, slots=True)
+class RhythmAnalyzerTelemetryEvent:
+    """One onset; its time is ``(frame + fraction)`` envelope frames, bias-corrected."""
+
+    frame: int
+    fraction: float
+    lock_epoch: int
+    beat_index: int
+    beat_fraction: float
+    period_seconds: float
+    strength: float
+    band: int
+    unlocked: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RhythmAnalyzerTelemetryFrame(TelemetryFrame):
+    sample_rate: float
+    generation: int
+    envelope_hop_samples: int
+    envelope_frame_count: int
+    time_seconds: float
+    latency_seconds: float
+    dropped_events: int
+    locked: bool
+    lock_epoch: int
+    confidence: float
+    period_seconds: float
+    next_beat_frame: int
+    next_beat_fraction: float
+    next_beat_index: int
+    comb_best_bpm: float
+    tempogram: tuple[float, ...]
+    events: tuple[RhythmAnalyzerTelemetryEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class SpectrogramTelemetryFrame(TelemetryFrame):
     sample_rate: float
     time_seconds: float
@@ -143,15 +212,41 @@ class StereoTelemetryFrame(TelemetryFrame):
     peak_right: float
 
 
+@dataclass(frozen=True, slots=True)
+class TonalBalanceEQTelemetryFrame(TelemetryFrame):
+    """Measured band levels, active target and applied response (41 bands, 128 points)."""
+
+    sample_rate: float
+    target_index: int
+    absolute_gate: bool
+    relative_gate: bool
+    loudness_valid: bool
+    target_valid: bool
+    loudness_lkfs: float
+    makeup_db: float
+    gated_hop_count: int
+    level_db: tuple[float, ...]
+    persistence: tuple[float, ...]
+    presence: tuple[float, ...]
+    command_db: tuple[float, ...]
+    target_mu_db: tuple[float, ...]
+    target_sigma_db: tuple[float, ...]
+    band_flags: tuple[int, ...]
+    response_db: tuple[float, ...]
+
+
 _ANALYZER_FRAMES = {
+    "AnalogMeter": (27, (1,)),
     "ChromaSpiral": (4, (2,)),
     "LevelMeter": (1, (1,)),
     "NoteSpectrogram": (24, (3,)),
     "Oscilloscope": (3, (2,)),
     "PitchMeter": (26, (1,)),
+    "RhythmAnalyzer": (28, (1,)),
     "SpectrumAnalyzer": (4, (1, 2)),
     "Spectrogram": (5, (1, 2)),
     "StereoMeter": (6, (2,)),
+    "TonalBalanceEQ": (29, (1,)),
 }
 
 _MULTIRES_HQ_MIN_FREQUENCY = 20.0
@@ -160,6 +255,14 @@ _MULTIRES_HQ_SPECTRUM_CELLS = 2048
 _MULTIRES_HQ_SPECTROGRAM_CELLS = 256
 _PITCH_METER_MIN_DETECTED_MIDI = 20.5
 _PITCH_METER_MAX_DETECTED_MIDI = 108.5
+_ANALOG_METER_LOUDNESS_MODE = 5
+_ANALOG_METER_MIN_DB = -240.0
+_RHYTHM_ANALYZER_PAYLOAD_BYTES = 1344
+_RHYTHM_ANALYZER_TEMPOGRAM_BINS = 192
+_RHYTHM_ANALYZER_MAX_EVENTS = 16
+_TONAL_BALANCE_PAYLOAD_BYTES = 1564
+_TONAL_BALANCE_BANDS = 41
+_TONAL_BALANCE_GRID_POINTS = 128
 
 
 def _common(
@@ -582,6 +685,195 @@ def _decode_pitch_meter(
     )
 
 
+def _decode_analog_meter(
+    payload: memoryview,
+    node: tuple[str, str | None, int],
+    sequence: int,
+    dropped: int,
+) -> TelemetryFrame | None:
+    if len(payload) < 12:
+        return None
+    mode, channel_count, flags = struct.unpack_from("<BBH", payload)
+    loudness = mode == _ANALOG_METER_LOUDNESS_MODE
+    program_offset = 4 + channel_count * 8
+    if (
+        mode > _ANALOG_METER_LOUDNESS_MODE
+        or not 1 <= channel_count <= 16
+        or flags & ~(3 if loudness else 0)
+        or len(payload) != program_offset + (24 if loudness else 0)
+    ):
+        return None
+
+    def is_level(value: float) -> bool:
+        return math.isfinite(value) and value >= _ANALOG_METER_MIN_DB
+
+    values = struct.unpack_from(f"<{channel_count * 2}f", payload, 4)
+    if not all(is_level(value) for value in values):
+        return None
+    channels = tuple(
+        AnalogMeterTelemetryChannel(needle_db=needle_db, max_db=max_db)
+        for needle_db, max_db in zip(values[::2], values[1::2], strict=True)
+    )
+    integrated_valid = bool(flags & 1)
+    lra_valid = bool(flags & 2)
+    program = None
+    if loudness:
+        (
+            momentary,
+            short_term,
+            integrated,
+            lra,
+            max_true_peak,
+            integrated_seconds,
+        ) = struct.unpack_from("<6f", payload, program_offset)
+        if (
+            not all(is_level(value) for value in (momentary, short_term, max_true_peak))
+            or not math.isfinite(integrated_seconds)
+            or integrated_seconds < 0
+            or (not is_level(integrated) if integrated_valid else integrated != 0)
+            or (not (math.isfinite(lra) and lra >= 0) if lra_valid else lra != 0)
+        ):
+            return None
+        program = AnalogMeterTelemetryProgram(
+            momentary=momentary,
+            short_term=short_term,
+            integrated=integrated,
+            lra=lra,
+            max_true_peak=max_true_peak,
+            integrated_seconds=integrated_seconds,
+        )
+    return AnalogMeterTelemetryFrame(
+        **_common("analogMeter", node, sequence, dropped),
+        mode=mode,
+        channel_count=channel_count,
+        integrated_valid=integrated_valid,
+        lra_valid=lra_valid,
+        channels=channels,
+        program=program,
+    )
+
+
+def _decode_rhythm_analyzer(
+    payload: memoryview,
+    node: tuple[str, str | None, int],
+    sequence: int,
+    dropped: int,
+) -> TelemetryFrame | None:
+    if len(payload) != _RHYTHM_ANALYZER_PAYLOAD_BYTES:
+        return None
+    (
+        sample_rate,
+        generation,
+        envelope_hop_samples,
+        envelope_frame_count,
+        time_seconds,
+        latency_seconds,
+        dropped_events,
+        event_count,
+        tracker_flags,
+        lock_epoch,
+        confidence,
+        period_seconds,
+        next_beat_frame,
+        next_beat_fraction,
+        next_beat_index,
+        comb_best_bpm,
+    ) = struct.unpack_from("<fIIIffIIIIffIfIf", payload)
+    locked = bool(tracker_flags & 1)
+    if (
+        not math.isfinite(sample_rate)
+        or sample_rate <= 0
+        or generation == 0
+        or envelope_hop_samples == 0
+        or not math.isfinite(time_seconds)
+        or not math.isfinite(latency_seconds)
+        or latency_seconds < 0
+        or event_count > _RHYTHM_ANALYZER_MAX_EVENTS
+        or tracker_flags & ~1
+        or not math.isfinite(confidence)
+        or confidence < 0
+        or not math.isfinite(comb_best_bpm)
+        or comb_best_bpm < 0
+        or (
+            locked
+            and (
+                not (math.isfinite(period_seconds) and period_seconds > 0)
+                or not 0 <= next_beat_fraction < 1
+            )
+        )
+        or (
+            not locked
+            and (
+                period_seconds != 0
+                or next_beat_frame != 0
+                or next_beat_fraction != 0
+                or next_beat_index != 0
+            )
+        )
+    ):
+        return None
+    tempogram = struct.unpack_from(f"<{_RHYTHM_ANALYZER_TEMPOGRAM_BINS}f", payload, 64)
+    if not all(0 <= value <= 1 for value in tempogram):
+        return None
+    events = []
+    for index in range(event_count):
+        (
+            frame,
+            fraction,
+            event_epoch,
+            beat_index,
+            beat_fraction,
+            event_period,
+            strength,
+            band,
+            flags,
+            reserved,
+        ) = struct.unpack_from("<IfIifffBBH", payload, 832 + index * 32)
+        if (
+            not 0 <= fraction < 1
+            or not 0 <= beat_fraction < 1
+            or not (math.isfinite(event_period) and event_period >= 0)
+            or not (math.isfinite(strength) and strength > 0)
+            or band > 2
+            or flags & ~1
+            or reserved != 0
+        ):
+            return None
+        events.append(
+            RhythmAnalyzerTelemetryEvent(
+                frame=frame,
+                fraction=fraction,
+                lock_epoch=event_epoch,
+                beat_index=beat_index,
+                beat_fraction=beat_fraction,
+                period_seconds=event_period,
+                strength=strength,
+                band=band,
+                unlocked=bool(flags & 1),
+            )
+        )
+    return RhythmAnalyzerTelemetryFrame(
+        **_common("rhythmAnalyzer", node, sequence, dropped),
+        sample_rate=sample_rate,
+        generation=generation,
+        envelope_hop_samples=envelope_hop_samples,
+        envelope_frame_count=envelope_frame_count,
+        time_seconds=time_seconds,
+        latency_seconds=latency_seconds,
+        dropped_events=dropped_events,
+        locked=locked,
+        lock_epoch=lock_epoch,
+        confidence=confidence,
+        period_seconds=period_seconds,
+        next_beat_frame=next_beat_frame,
+        next_beat_fraction=next_beat_fraction,
+        next_beat_index=next_beat_index,
+        comb_best_bpm=comb_best_bpm,
+        tempogram=tempogram,
+        events=tuple(events),
+    )
+
+
 def _decode_stereo(
     payload: memoryview,
     node: tuple[str, str | None, int],
@@ -634,6 +926,81 @@ def _decode_stereo(
     )
 
 
+def _decode_tonal_balance(
+    payload: memoryview,
+    node: tuple[str, str | None, int],
+    sequence: int,
+    dropped: int,
+) -> TelemetryFrame | None:
+    if len(payload) != _TONAL_BALANCE_PAYLOAD_BYTES:
+        return None
+    (
+        sample_rate,
+        band_count,
+        grid_count,
+        state_flags,
+        target_index,
+        reserved,
+        loudness_lkfs,
+        makeup_db,
+        gated_hop_count,
+    ) = struct.unpack_from("<fHHBBHffI", payload)
+    loudness_valid = bool(state_flags & 4)
+    bands = _TONAL_BALANCE_BANDS
+
+    def floats(offset: int, count: int = bands) -> tuple[float, ...]:
+        return struct.unpack_from(f"<{count}f", payload, offset)
+
+    level_db = floats(24)
+    persistence = floats(188)
+    presence = floats(352)
+    command_db = floats(516)
+    target_mu_db = floats(680)
+    target_sigma_db = floats(844)
+    band_flags = tuple(payload[1008 : 1008 + bands])
+    response_db = floats(1052, _TONAL_BALANCE_GRID_POINTS)
+    if (
+        not math.isfinite(sample_rate)
+        or sample_rate <= 0
+        or band_count != bands
+        or grid_count != _TONAL_BALANCE_GRID_POINTS
+        or state_flags & ~15
+        or reserved != 0
+        or (not math.isfinite(loudness_lkfs) if loudness_valid else loudness_lkfs != 0)
+        or not math.isfinite(makeup_db)
+        or any(payload[1049:1052])
+        or not all(
+            math.isfinite(value)
+            for values in (level_db, command_db, target_mu_db, response_db)
+            for value in values
+        )
+        or not all(0 <= value <= 1 for value in persistence + presence)
+        or not all(0 <= value < math.inf for value in target_sigma_db)
+        or any(flags & ~31 for flags in band_flags)
+    ):
+        return None
+    return TonalBalanceEQTelemetryFrame(
+        **_common("tonalBalance", node, sequence, dropped),
+        sample_rate=sample_rate,
+        target_index=target_index,
+        absolute_gate=bool(state_flags & 1),
+        relative_gate=bool(state_flags & 2),
+        loudness_valid=loudness_valid,
+        target_valid=bool(state_flags & 8),
+        loudness_lkfs=loudness_lkfs,
+        makeup_db=makeup_db,
+        gated_hop_count=gated_hop_count,
+        level_db=level_db,
+        persistence=persistence,
+        presence=presence,
+        command_db=command_db,
+        target_mu_db=target_mu_db,
+        target_sigma_db=target_sigma_db,
+        band_flags=band_flags,
+        response_db=response_db,
+    )
+
+
 _DECODERS = {
     1: _decode_level,
     3: _decode_oscilloscope,
@@ -642,6 +1009,9 @@ _DECODERS = {
     6: _decode_stereo,
     24: _decode_note_spectrogram,
     26: _decode_pitch_meter,
+    27: _decode_analog_meter,
+    28: _decode_rhythm_analyzer,
+    29: _decode_tonal_balance,
 }
 
 
@@ -684,15 +1054,21 @@ def _decode_telemetry_packet(
 
 
 __all__ = [
+    "AnalogMeterTelemetryChannel",
+    "AnalogMeterTelemetryFrame",
+    "AnalogMeterTelemetryProgram",
     "LevelTelemetryChannel",
     "LevelTelemetryFrame",
     "NoteSpectrogramTelemetryFrame",
     "OscilloscopeTelemetryFrame",
     "PitchMeterTelemetryFrame",
+    "RhythmAnalyzerTelemetryEvent",
+    "RhythmAnalyzerTelemetryFrame",
     "SpectrogramTelemetryFrame",
     "SpectrogramHqTelemetryFrame",
     "SpectrumTelemetryFrame",
     "SpectrumHqTelemetryFrame",
     "StereoTelemetryFrame",
     "TelemetryFrame",
+    "TonalBalanceEQTelemetryFrame",
 ]

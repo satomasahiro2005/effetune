@@ -1,6 +1,6 @@
 {
   "name": "effetune",
-  "version": "2.11.0",
+  "version": "2.12.0",
   "private": true,
   "description": "Desktop Audio Effect Processor",
   "main": "electron/main.js",
@@ -61,7 +61,7 @@
   "author": "Frieve",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^44.4.5",
+    "electron": "^44.5.1",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "eslint": "^10.11.0",
@@ -91,12 +91,7 @@
       "docs/**/*",
       "startup-audio.html",
       "effetune.html",
-      "effetune.css",
-      "effetune-theme.css",
-      "effetune-mobile.css",
-      "effetune-library.css",
-      "user-data-backup.css",
-      "pipeline-analyzer.css",
+      "css/**/*",
       "sw.js",
       "sw-precache.js",
       "manifest.json",
@@ -276,9 +271,9 @@
     "npmRebuild": false
   },
   "dependencies": {
-    "@mediabunny/flac-encoder": "1.60.0",
+    "@mediabunny/flac-encoder": "1.61.0",
     "electron-updater": "6.8.9",
-    "mediabunny": "1.60.0",
+    "mediabunny": "1.61.0",
     "music-metadata": "^11.16.1",
     "qrcode-generator": "^2.0.4",
     "ws": "^8.22.0"

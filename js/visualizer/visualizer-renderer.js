@@ -1,8 +1,10 @@
-import { createLayer, paletteGradient, VisualizerEffects } from './visualizer-effects.js';
+import { createLayer, drawBackplates, paletteGradient, VisualizerEffects } from './visualizer-effects.js';
 
+import { drawStyledText } from './visualizer-text.js';
 import { createAnalyzerDisplay } from './visualizer-analyzer-display.js';
+import { REFERENCE_WIDTH } from './visualizer-model.js';
 
-const ANALYZER_TYPES = new Set(['spectrum', 'spectrogram', 'oscilloscope', 'stereo', 'notes', 'chroma', 'level-meter']);
+const ANALYZER_TYPES = new Set(['spectrum', 'spectrogram', 'oscilloscope', 'stereo', 'notes', 'chroma', 'level-meter', 'phase', 'analog-meter', 'rhythm-analyzer']);
 
 export class VisualizerRenderer {
     constructor(canvas) {
@@ -22,10 +24,19 @@ export class VisualizerRenderer {
         return image.complete && image.naturalWidth ? image : null;
     }
 
-    draw(layout, sources, metadata, time, { editing = false, quality = 'auto', pixelRatio = globalThis.devicePixelRatio || 1 } = {}) {
+    dispose() {
+        for (const state of this.layers.values()) state.display?.dispose();
+        this.layers.clear();
+    }
+
+    draw(layout, sources, metadata, time, { editing = false, quality = 'auto' } = {}) {
         const start = performance.now();
         const stage = this.canvas, ctx = stage.getContext('2d');
         if (!ctx || !stage.width || !stage.height) return;
+        // Graphics scale with the output width on the 1280-wide basis, so a layout looks
+        // the same at any resolution. Analyzer graphics additionally follow Graph Scale.
+        const stageScale = stage.width / REFERENCE_WIDTH;
+        const graphScale = stageScale * (layout.graphScale ?? 1);
         if (quality === 'high') this.quality = 0;
         if (quality === 'low') this.quality = 3;
         ctx.clearRect(0, 0, stage.width, stage.height);
@@ -60,7 +71,7 @@ export class VisualizerRenderer {
                 Boolean(item.palette?.mode === 'gradient' && item.palette.motion.mode !== 'none');
             if (ANALYZER_TYPES.has(item.type)) {
                 state.display ||= createAnalyzerDisplay(item, state.canvas, sources);
-                state.display?.draw(item, time, width / pixelRatio, layout.background.themeColors);
+                state.display?.draw(item, time, width / graphScale, layout.background.themeColors, stageScale);
             } else if (changed) {
                 this.drawItem(state, item, metadata, image, time, editing);
                 state.signature = signature; state.frame = frame; state.image = image;
@@ -68,7 +79,9 @@ export class VisualizerRenderer {
             const signal = state.display?.signalCanvas;
             const flipCanvas = !ANALYZER_TYPES.has(item.type);
             const output = this.effects.apply(item.id, signal || state.canvas, item.effects, time, modulators, this.quality,
-                changed || !flipCanvas, flipCanvas && item.flipX, flipCanvas && item.flipY);
+                changed || !flipCanvas, flipCanvas && item.flipX, flipCanvas && item.flipY, stageScale);
+            drawBackplates(ctx, item.rect.x * stage.width, item.rect.y * stage.height, width, height,
+                item.effects, time, modulators, stageScale);
             if (state.display?.underlayCanvas) ctx.drawImage(state.display.underlayCanvas,
                 item.rect.x * stage.width, item.rect.y * stage.height, width, height);
             ctx.save();
@@ -82,19 +95,21 @@ export class VisualizerRenderer {
                 (item.rect.y + item.rect.h / 2) * stage.height - height / 2, width, height);
             for (const label of state.display?.overflowLevelValues || []) {
                 ctx.save();
-                ctx.font = label.font;
-                ctx.fillStyle = label.fillStyle;
-                ctx.textAlign = label.textAlign;
-                ctx.textBaseline = label.textBaseline;
-                const metrics = ctx.measureText(label.text);
+                const { text, x: labelX, y: labelY, ...style } = label;
+                Object.assign(ctx, style);
+                const metrics = ctx.measureText(text);
                 const minX = metrics.actualBoundingBoxLeft ?? (label.textAlign === 'right' ? metrics.width : metrics.width / 2);
                 const maxX = stage.width - (metrics.actualBoundingBoxRight ?? (label.textAlign === 'right' ? 0 : metrics.width / 2));
-                const x = (item.rect.x + item.rect.w / 2) * stage.width - width / 2 + label.x;
-                const y = (item.rect.y + item.rect.h / 2) * stage.height - height / 2 + label.y;
-                if (minX > maxX) {
-                    ctx.textAlign = 'center';
-                    ctx.fillText(label.text, stage.width / 2, y, Math.max(1, stage.width - 2));
-                } else ctx.fillText(label.text, Math.max(minX, Math.min(maxX, x)), y);
+                const x = (item.rect.x + item.rect.w / 2) * stage.width - width / 2 + labelX;
+                const y = (item.rect.y + item.rect.h / 2) * stage.height - height / 2 + labelY;
+                const draw = method => {
+                    if (minX > maxX) {
+                        ctx.textAlign = 'center';
+                        ctx[method](text, stage.width / 2, y, Math.max(1, stage.width - 2));
+                    } else ctx[method](text, Math.max(minX, Math.min(maxX, x)), y);
+                };
+                draw('strokeText');
+                draw('fillText');
                 ctx.restore();
             }
         }
@@ -123,11 +138,9 @@ export class VisualizerRenderer {
                 this.drawCover(ctx, image, w, h); ctx.restore();
             }
         } else if (['title', 'album', 'artist'].includes(item.type)) {
-            const text = metadata?.[item.type] || (editing ? { title: 'Track title', album: 'Album', artist: 'Artist' }[item.type] : '');
-            ctx.fillStyle = item.palette.mode === 'solid' ? item.palette.color : paletteGradient(ctx, item.palette, w, time);
-            ctx.font = `${item.style.italic ? 'italic ' : ''}${item.style.bold ? 'bold ' : ''}${item.style.fontSize * this.canvas.width / 1280}px ${item.style.fontFamily || 'sans-serif'}`;
-            ctx.textAlign = item.style.align; ctx.textBaseline = 'middle';
-            ctx.fillText(text, item.style.align === 'center' ? w / 2 : item.style.align === 'right' ? w : 0, h / 2, w);
+            const raw = metadata?.[item.type] || (editing ? { title: 'Track title', album: 'Album', artist: 'Artist' }[item.type] : '');
+            drawStyledText(ctx, raw, item.style, w, h, this.canvas.width / REFERENCE_WIDTH,
+                item.palette.mode === 'solid' ? item.palette.color : paletteGradient(ctx, item.palette, w, time));
         }
     }
 

@@ -50,7 +50,7 @@ export async function buildExtension() {
     const scripts = new Set([
         'extension/service-worker.js', 'extension/offscreen.js', 'extension/session.js', 'extension/editor.js', 'extension/popup.js',
         'plugins/plugin-base.js', 'plugins/graph-point-interaction.js', 'plugins/frequency-axis.js',
-        'plugins/spectrum-overlay.js', 'plugins/frequency-preview.js', 'plugins/theme-palette.js',
+        'plugins/spectrum-overlay.js', 'plugins/frequency-preview.js', 'plugins/graph-readout.js', 'plugins/theme-palette.js',
         'plugins/multires-spectrum.js',
         'plugins/audio-processor.js', ...pluginPaths.map(filename => `${filename}.js`)
     ]);
@@ -94,8 +94,8 @@ export async function buildExtension() {
         ...(await walk('js/locales')),
         ...(await walk('presets')),
         'plugins/plugins.txt', 'plugins/dsp/effetune-dsp.wasm', 'plugins/dsp/effetune-dsp.simd.wasm',
-        'plugins/dsp/effetune-dsp.meta.json', 'effetune.css', 'effetune-theme.css', 'effetune-mobile.css', 'pipeline-analyzer.css',
-        'user-data-backup.css',
+        'plugins/dsp/effetune-dsp.meta.json', 'css/effetune.css', 'css/effetune-theme.css', 'css/effetune-mobile.css', 'css/pipeline-analyzer.css',
+        'css/user-data-backup.css',
         'images/icon_128x128.png', 'images/icon_192x192.png', 'images/icon_64x64.png', 'LICENSE'
     ];
     for (const filename of materials) files.set(filename, await fs.readFile(path.join(root, filename)));

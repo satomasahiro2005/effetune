@@ -22,7 +22,7 @@ test('the HTML entry and feature imports keep splash and optional features off t
   assert.doesNotMatch(main, /mainWindow\.reload\(\)/);
   assert.doesNotMatch(html, /<script[^>]+src="js\/app\.js"/);
   assert.doesNotMatch(html, /<script[^>]+src="js\/vendor\/(?:jszip|jsmediatags)/);
-  assert.doesNotMatch(html, /<link[^>]+href="(?:effetune-library|pipeline-analyzer)\.css"/);
+  assert.doesNotMatch(html, /<link[^>]+href="css\/(?:effetune-library|pipeline-analyzer)\.css"/);
   assert.doesNotMatch(uiManager, /^import .*audio-player\.js/m);
   assert.doesNotMatch(uiManager, /^import .*library-manager-v2\.js/m);
   assert.doesNotMatch(uiManager, /^import .*pipeline-analyzer\/(?:controller|ui)\.js/m);
@@ -31,8 +31,8 @@ test('the HTML entry and feature imports keep splash and optional features off t
   assert.match(uiManager, /import\('\.\/library\/library-manager-v2\.js'\)/);
   assert.match(uiManager, /import\('\.\/pipeline-analyzer\/controller\.js'\)/);
   assert.match(uiManager, /import\('\.\/ui\/double-blind-test\/double-blind-test\.js'\)/);
-  assert.match(uiManager, /loadStylesheet\('effetune-library\.css'\)/);
-  assert.match(uiManager, /loadStylesheet\('pipeline-analyzer\.css'\)/);
+  assert.match(uiManager, /loadStylesheet\(LIBRARY_STYLESHEET\)/);
+  assert.match(uiManager, /loadStylesheet\(PIPELINE_ANALYZER_STYLESHEET\)/);
   assert.doesNotMatch(app, /^import .*midi-controller-manager\.js/m);
   assert.doesNotMatch(app, /import\('\.\/electron\/configIntegration\.js'\)/);
   assert.match(app, /import\('\.\/electron\/config-store\.js'\)/);

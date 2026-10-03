@@ -36,6 +36,158 @@
         return keys;
     }
 
+    // Piano key proportions in millimetres: 23.5 mm white-key pitch and 150 mm white keys
+    // with 95 mm black keys. The default length is half of a real piano (lengthScale 2 is
+    // the real ratio). Black keys fill their semitone, as wide as the white keys' back parts.
+    const KEYBOARD_DEPTH_PER_OCTAVE = 150 / (7 * 23.5) / 2;
+    const BLACK_KEY_DEPTH_RATIO = 95 / 150;
+
+    // Keyboard depth for an axis on which one octave spans octaveLength. The depth is
+    // limited to half of the cross-axis length so extreme zoom still leaves a plot.
+    function keyboardDepths(octaveLength, crossLength, lengthScale = 1) {
+        const depth = octaveLength * KEYBOARD_DEPTH_PER_OCTAVE * lengthScale;
+        const gutter = depth < crossLength / 2 ? depth : crossLength / 2;
+        return { gutter, blackDepth: gutter * BLACK_KEY_DEPTH_RATIO };
+    }
+
+    // Shading applies once black keys are at least this long in CSS pixels; smaller
+    // keyboards keep the flat keys, whose details would not be visible anyway.
+    const KEY_SHADING_MIN_BLACK_DEPTH = 12;
+    const darken = alpha => 'rgba(0, 0, 0, ' + alpha + ')'; // theme-allow: Fixed shading on self-painted piano keys.
+    const lighten = alpha => 'rgba(255, 255, 255, ' + alpha + ')'; // theme-allow: Fixed highlight on self-painted piano keys.
+
+    // Shades a flat-painted keyboard so it reads as real keys. The caller paints the white
+    // keys and their gaps first; drawBlackKeys paints the flat black keys, which lie over the
+    // black-key shadows drawn here. `along` is the canvas axis ('x' or 'y') the keys run
+    // along; their depth grows from the roll boundary at `edge` toward the player. Keys are
+    // [start, end, press] along `along`.
+    // Unpressed keys share one gradient per layer, so the cost stays close to flat; only
+    // pressed keys add fills. A pressed key (press 0-1) sinks: its shading moves toward the
+    // player, so its front edge drops out of view, and it darkens as it tilts away from the light.
+    function shadeKeyboard(ctx, { along, edge, length, gutter, blackDepth, dpr }, blackKeys, drawBlackKeys,
+        whiteKeys = []) {
+        const pressOf = key => key[2] > 0.05 ? (key[2] < 1 ? key[2] : 1) : 0;
+        if (blackDepth < KEY_SHADING_MIN_BLACK_DEPTH * dpr) {
+            drawBlackKeys();
+            return;
+        }
+        // Adds a rectangle given along the keys and in depth from the roll boundary,
+        // clipped to the keyboard.
+        const rect = (start, end, depthEnd, depthStart = 0) => {
+            const low = start > 0 ? start : 0;
+            const high = end < length ? end : length;
+            const near = depthStart > 0 ? depthStart : 0;
+            const far = depthEnd < gutter ? depthEnd : gutter;
+            if (high <= low || far <= near) return;
+            if (along === 'x') ctx.rect(low, edge + near, high - low, far - near);
+            else ctx.rect(edge + near, low, far - near, high - low);
+        };
+        const fillRects = (style, addRects) => {
+            ctx.fillStyle = style;
+            ctx.beginPath();
+            addRects();
+            ctx.fill();
+        };
+        // Fills a gradient running in depth from `near` to `far`. Stops are [offset, released
+        // tone, pressed tone]; a tone above 0 lightens and one below 0 darkens by its
+        // magnitude, blended by the press amount.
+        const fillDepthGradient = (near, far, stops, press, addRects) => {
+            const gradient = along === 'x'
+                ? ctx.createLinearGradient(0, edge + near, 0, edge + far)
+                : ctx.createLinearGradient(edge + near, 0, edge + far, 0);
+            for (const [offset, released, pressed] of stops) {
+                const tone = released + (pressed - released) * press;
+                gradient.addColorStop(offset, tone < 0 ? darken(-tone) : lighten(tone));
+            }
+            fillRects(gradient, addRects);
+        };
+        const released = keys => keys.filter(key => pressOf(key) === 0);
+        const pressed = keys => keys.filter(key => pressOf(key) > 0);
+        const lip = gutter * 0.04 > 1.5 * dpr ? gutter * 0.04 : 1.5 * dpr;
+        const shadow = blackDepth * 0.05 > dpr ? blackDepth * 0.05 : dpr;
+        const slope = blackDepth * 0.1;
+        // White keys: shade under the roll edge and a rounded front lip, which a pressed key
+        // pushes out of view.
+        const whiteStops = depth => [
+            [0, -0.3, -0.3], [0.05, -0.08, -0.12], [0.5, 0, -0.08],
+            [1 - 2 * lip / depth, -0.04, -0.16], [1 - lip / depth, 0.35, -0.2], [1, -0.3, -0.3]
+        ];
+        fillDepthGradient(0, gutter, whiteStops(gutter), 0, () => {
+            if (!whiteKeys.length) rect(0, length, gutter);
+            else for (const [start, end] of released(whiteKeys)) rect(start, end, gutter);
+        });
+        for (const key of pressed(whiteKeys)) {
+            const press = pressOf(key);
+            const depth = gutter + 2 * lip * press;
+            fillDepthGradient(0, depth, whiteStops(depth), press, () => rect(key[0], key[1], gutter));
+        }
+        // A key sunk below a neighbour shows the neighbour's side wall, as wide as the
+        // height difference between the two keys.
+        if (pressed(whiteKeys).length) {
+            const sorted = [...whiteKeys].sort((a, b) => a[0] - b[0]);
+            // Keys without a touching neighbour (at either end) count as unpressed neighbours.
+            const wall = (key, neighbour, gap) => {
+                const width = shadow * (pressOf(key) - (neighbour && gap < 1 ? pressOf(neighbour) : 0));
+                return width > 0.5 * dpr ? width : 0;
+            };
+            fillDepthGradient(0, gutter, [[0, -0.04, -0.04], [1, -0.22, -0.22]], 0, () => {
+                sorted.forEach((key, index) => {
+                    const previous = sorted[index - 1];
+                    const next = sorted[index + 1];
+                    const left = wall(key, previous, previous ? key[0] - previous[1] : 0);
+                    const right = wall(key, next, next ? next[0] - key[1] : 0);
+                    if (left) rect(key[0], key[0] + left, gutter);
+                    if (right) rect(key[1] - right, key[1], gutter);
+                });
+            });
+        }
+        // Like the UI's box-shadows, the black-key shadow falls straight down the screen,
+        // whatever rotation or flip the caller applied. The inverse transform maps the
+        // screen-down vector into keyboard space.
+        const matrix = typeof ctx.getTransform === 'function' ? ctx.getTransform() : null;
+        const determinant = matrix ? matrix.a * matrix.d - matrix.b * matrix.c : 1;
+        const downX = matrix ? -matrix.c / determinant : 0;
+        const downY = matrix ? matrix.a / determinant : 1;
+        const downScale = shadow / Math.hypot(downX, downY);
+        const shiftAlong = (along === 'x' ? downX : downY) * downScale;
+        const shiftDepth = (along === 'x' ? downY : downX) * downScale;
+        // A wide faint layer under a tight one approximates a soft shadow without a blur.
+        for (const [grow, alpha] of [[shadow, 0.1], [0, 0.12]]) {
+            fillRects(darken(alpha), () => {
+                for (const key of blackKeys) {
+                    // A pressed black key sits closer to the white keys, so its shadow tightens.
+                    const lift = 1 - 0.6 * pressOf(key);
+                    const offsetAlong = shiftAlong * lift;
+                    const offsetDepth = shiftDepth * lift;
+                    const spread = grow * lift;
+                    rect(key[0] + offsetAlong - spread, key[1] + offsetAlong + spread,
+                        blackDepth + offsetDepth + spread, offsetDepth - spread);
+                }
+            });
+        }
+        drawBlackKeys();
+        // Black keys: darker sides, a lit sloping front end, and a raised top face. Like a
+        // pressed white key, a pressed black key pushes its sloping front out of view.
+        const shadeBlackKeys = (keys, press) => {
+            if (!keys.length) return;
+            const depth = blackDepth + 0.8 * slope * press;
+            const front = 1 - slope / depth;
+            fillDepthGradient(0, depth, [
+                [0, -0.25, -0.25], [front, -0.1, -0.2], [front + 0.001, 0.28, 0.08], [1, 0.08, -0.1]
+            ], press, () => {
+                for (const [start, end] of keys) rect(start, end, blackDepth);
+            });
+            fillDepthGradient(0, depth, [[0, 0.04, 0.02], [front, 0.2, 0.08]], press, () => {
+                for (const [start, end] of keys) {
+                    const inset = (end - start) * 0.15;
+                    if (inset >= 0.5 * dpr) rect(start + inset, end - inset, depth - slope);
+                }
+            });
+        };
+        shadeBlackKeys(released(blackKeys), 0);
+        for (const key of pressed(blackKeys)) shadeBlackKeys([key], pressOf(key));
+    }
+
     function hitKey(keys, along, across, gutter, blackDepth) {
         if (across < 0 || across > gutter) return null;
         if (across <= blackDepth) {
@@ -73,7 +225,8 @@
         ['SpectrogramPlugin', ['graph-container', 20, 40000]],
         ['NoteSpectrogramPlugin', ['graph-container', 0, 0]],
         ['PitchMeterPlugin', ['graph-container', 0, 0]],
-        ['PhaseSelectEqPlugin', ['graph-container', 20, 40000]]
+        ['PhaseSelectEqPlugin', ['graph-container', 20, 40000]],
+        ['TonalBalanceEQPlugin', ['graph-container', 0, 0]]
     ].map(([name, [graph, minFreq, maxFreq, inset = 0]]) => [name, {
         plotSelector: `.${graph}${inset ? '' : ' canvas'}`,
         ...(inset ? { mountSelector: `.${graph}` } : {}),
@@ -112,15 +265,17 @@
     for (const name of ['SpectrumAnalyzerPlugin', 'SpectrogramPlugin']) {
         const vertical = name === 'SpectrogramPlugin';
         const target = targets.get(name);
-        target.axisCheck = ['getKeyboardGeometry(length)', 'const blackDepth = gutter / 1.6;'];
+        target.axisCheck = ['getKeyboardGeometry(length)', 'keyboardDepths(', '_DISPLAY_FREQ / '];
         target.axis = (plugin, box) => {
             const orientation = vertical ? 'y' : 'x';
             const length = vertical ? box.height : box.width;
             const crossLength = vertical ? box.width : box.height;
-            const gutter = plugin.kb && crossLength > (vertical ? 28 : 44.8) ? (vertical ? 28 : 44.8) : 0;
+            const { gutter, blackDepth } = plugin.kb
+                ? keyboardDepths(length / Math.log2(40000 / 20), crossLength, plugin.displayOptions?.keyboardLength)
+                : { gutter: 0, blackDepth: 0 };
             const scale = plugin.sc === 'linear' ? 'linear' : 'log';
             return {
-                orientation, length, crossLength, gutter, blackDepth: gutter / 1.6, a4: 440,
+                orientation, length, crossLength, gutter, blackDepth, a4: 440,
                 keys: gutter ? plugin.getKeyboardGeometry(length) : null,
                 toPos: frequency => vertical ? plugin.freqToY(frequency) / 255 * length : plugin.frequencyToX(frequency, length),
                 toFreq: position => positionToFrequency(position, length, 20, 40000, scale, orientation)
@@ -145,7 +300,7 @@
             }
             return {
                 orientation, length, crossLength, a4, keys, rowHeight,
-                gutter: name === 'PitchMeterPlugin' ? 45 : 44.8, blackDepth: 28,
+                ...keyboardDepths(12 * rowHeight, crossLength, plugin.displayOptions?.keyboardLength),
                 toPos(frequency) {
                     const midi = 69 + 12 * Math.log2(frequency / a4);
                     const position = (midi - plugin.mn + 0.5) * rowHeight;
@@ -158,6 +313,13 @@
             };
         };
     }
+    targets.get('TonalBalanceEQPlugin').axisCheck = ['freqToX: frequency =>', 'xToFreq: x =>'];
+    targets.get('TonalBalanceEQPlugin').axis = (plugin, box) => ({
+        orientation: 'x', length: box.width, crossLength: box.height, gutter: 0,
+        // The target-adjust editor uses the canvas's band-centre axis.
+        toPos: frequency => plugin._adjustEditor.freqToX(frequency) / 100 * box.width,
+        toFreq: position => plugin._adjustEditor.xToFreq(clamp(position / box.width, 0, 1) * 100)
+    });
     targets.get('PhaseSelectEqPlugin').axisCheck = ['_frequencyToY(frequency)', '_yToFrequency(y)', 'this.sampleRate * 0.49'];
     targets.get('PhaseSelectEqPlugin').axis = (plugin, box) => ({
         orientation: 'y', length: box.height, crossLength: box.width, gutter: 0,
@@ -185,5 +347,5 @@
     }
 
     window.FrequencyAxis = { targets, getAxis, pruneDetached, frequencyToPosition,
-        positionToFrequency, nearestSemitone, noteFrequency, noteAxisKeys, hitKey };
+        positionToFrequency, nearestSemitone, noteFrequency, noteAxisKeys, keyboardDepths, shadeKeyboard, hitKey };
 })();

@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
+import { frequencyAxisSource } from '../helpers/spectrum-overlay-harness.mjs';
 import { fileURLToPath } from 'node:url';
 import { TelemetryHub, TELEMETRY_HEADER_BYTES } from '../../js/audio/telemetry-hub.js';
 import { audibleFrameTime, audibleContextTime } from '../../js/audio/visual-sync.js';
@@ -18,6 +19,42 @@ const confidenceOffset = 28;
 const volumeOffset = confidenceOffset + pitchCount * 4;
 const payloadBytes = volumeOffset + pitchCount * 4;
 const historyWidth = 1024;
+
+// Canvas calls used only by the shaded piano keys.
+const keyShadingStubs = { rect() {}, fill() {}, createLinearGradient: () => ({ addColorStop() {} }) };
+
+// Canvas calls used only by the Volume history bar shapes.
+const volumePathStubs = {
+    save() {}, restore() {}, translate() {}, clip() {}, beginPath() {}, rect() {},
+    moveTo() {}, lineTo() {}, closePath() {}, ellipse() {}, fill() {}
+};
+
+// Records Volume history rectangles and filled bar paths in drawing order.
+function createVolumeContext() {
+    const saved = [];
+    let path = [];
+    const events = [];
+    return {
+        events,
+        globalCompositeOperation: 'source-over',
+        save() { saved.push(this.globalCompositeOperation); },
+        restore() { this.globalCompositeOperation = saved.pop(); },
+        translate() {}, clip() {}, rect() {}, closePath() {}, clearRect() {},
+        beginPath() { path = []; },
+        moveTo(x, y) { path.push(['point', x, y]); },
+        lineTo(x, y) { path.push(['point', x, y]); },
+        ellipse(x, y, radiusX, radiusY) { path.push(['ellipse', x, y, radiusX, radiusY]); },
+        fill() {
+            events.push({ type: 'shape', path, color: styleSignature(this.fillStyle),
+                composite: this.globalCompositeOperation });
+        },
+        fillRect(x, y, width, height) {
+            events.push({ type: 'rect', x, y, width, height, color: styleSignature(this.fillStyle),
+                composite: this.globalCompositeOperation });
+        },
+        createLinearGradient: (...coordinates) => createGradient('linear', coordinates)
+    };
+}
 
 function createGradient(type, coordinates) {
     return {
@@ -49,6 +86,7 @@ class FakeElement {
                 putImageData() {},
                 drawImage() {},
                 fillRect() {},
+                ...volumePathStubs,
                 createLinearGradient: (...coordinates) => createGradient('linear', coordinates),
                 createRadialGradient: (...coordinates) => createGradient('radial', coordinates)
             };
@@ -125,6 +163,12 @@ function createPluginBase() {
     };
 }
 
+const FrequencyAxis = (() => {
+    const window = {};
+    vm.runInNewContext(frequencyAxisSource, { window });
+    return window.FrequencyAxis;
+})();
+
 async function loadPlugin({ telemetryHub = null, audioContext = null, nullCanvasContext = false,
     now = 0, background = [0, 0, 0], soft = [34, 34, 34], trace = [0, 255, 0] } = {}) {
     const source = await fs.readFile(path.join(repoRoot, pluginPath), 'utf8');
@@ -144,6 +188,7 @@ async function loadPlugin({ telemetryHub = null, audioContext = null, nullCanvas
         : name === 'graph-base-soft' ? `rgba(${soft.join(', ')}, 1)`
         : name === 'accent' ? 'rgba(26, 115, 232, 1)'
         : name === 'graph-trace' ? `rgba(${trace.join(', ')}, 1)` : originalGet(name);
+    vm.runInContext(frequencyAxisSource, context, { filename: 'frequency-axis.js' });
     vm.runInContext(source, context, { filename: pluginPath });
     const spectrogramSource = await fs.readFile(path.join(repoRoot, 'plugins', 'analyzer', 'spectrogram.js'), 'utf8');
     vm.runInContext(spectrogramSource, context, { filename: 'spectrogram.js' });
@@ -480,73 +525,86 @@ test('Volume history freezes normalized thickness when each column is written', 
 
 test('Volume bars map level to thickness and pitch resolution to center position', async () => {
     const plugin = await loadPlugin();
-    const fills = [];
-    const context = {
-        createLinearGradient(...coordinates) { return createGradient('linear', coordinates); },
-        fillRect(x, y, width, height) { fills.push({ x, y, width, height, color: this.fillStyle }); }
-    };
+    const context = createVolumeContext();
+    const shapes = () => context.events.filter(event => event.type === 'shape').map(event => event.path);
     plugin.volumeHistoryCanvas = { width: historyWidth, height: 100, getContext: () => context };
     plugin.mn = 21;
     plugin.mx = 21;
     plugin.pr = 'High';
+    plugin.writeColumn = 1;
     plugin.history[0] = 1;
     plugin.levelHistory[0] = 0;
     plugin.volumeHistoryDirty = true;
     plugin._paintVolumeHistory(100, plugin._displayPalette());
-    let bar = fills.find(fill => fill.width === 1);
-    assert.deepEqual([bar.y, bar.height], [70, 40]);
-    assert.deepEqual(bar.color.stops.map(stop => stop.offset), [0, 0.25, 0.75, 1]);
+    assert.deepEqual(shapes(), [[['ellipse', 1, 90, 1, 10]]]);
 
-    fills.length = 0;
+    context.events.length = 0;
     plugin.levelHistory[0] = 1;
     plugin.volumeHistoryDirty = true;
     plugin._paintVolumeHistory(100, plugin._displayPalette());
-    bar = fills.find(fill => fill.width === 1);
-    assert.deepEqual([bar.y, bar.height], [30.5, 119]);
+    assert.deepEqual(shapes(), [[['ellipse', 1, 90, 1, 49.5]]]);
 
-    fills.length = 0;
+    context.events.length = 0;
     plugin.pr = 'Semitone';
     plugin.levelHistory[0] = 0;
     plugin.volumeHistoryDirty = true;
     plugin._paintVolumeHistory(100, plugin._displayPalette());
-    bar = fills.find(fill => fill.width === 1);
-    assert.deepEqual([bar.y, bar.height], [30, 40]);
+    assert.deepEqual(shapes(), [[['ellipse', 1, 50, 1, 10]]]);
 });
 
-test('incremental Volume redraw preserves High bars that cross a neighboring row', async () => {
+test('Volume frames join overlapping bars across held columns and round off the rest', async () => {
     const plugin = await loadPlugin();
-    const fills = [];
-    const context = {
-        createLinearGradient(...coordinates) { return createGradient('linear', coordinates); },
-        fillRect(x, y, width, height) {
-            fills.push({ x, y, width, height, color: styleSignature(this.fillStyle) });
-        }
-    };
-    const rasterizeColumn = () => Array.from({ length: 20 }, (_, row) => {
-        let color = null;
-        for (const fill of fills) {
-            if (fill.x <= 0.5 && 0.5 < fill.x + fill.width &&
-                fill.y <= row + 0.5 && row + 0.5 < fill.y + fill.height) {
-                color = fill.color;
-            }
-        }
-        return color;
-    });
+    const context = createVolumeContext();
+    const shapes = () => context.events.filter(event => event.type === 'shape');
+    const round = path => path.map(([kind, ...values]) =>
+        [kind, ...values.map(value => Math.round(value * 100) / 100)]);
+    plugin.volumeHistoryCanvas = { width: historyWidth, height: 100, getContext: () => context };
+    plugin.mn = 21;
+    plugin.mx = 21;
+    plugin.pr = 'High';
+    plugin.writeColumn = 4;
+    plugin.volumeFrameEnds[1] = 0;
+    plugin.volumeFrameEnds[2] = 0;
+    plugin.history[2] = 1;
+    const current = 3 * pitchCount;
+    plugin.history[current + 2] = 0.5;
+    plugin.history[current + 3] = 1;
+
+    plugin.volumeHistoryDirty = true;
+    plugin._paintVolumeHistory(100, plugin._displayPalette());
+    const [onset, band] = shapes();
+    assert.deepEqual(onset.path, [['ellipse', 1, 50, 1, 10]]);
+    // The parabolic peak sits a sixth of a fine bin below the strongest bin.
+    assert.deepEqual(round(band.path),
+        [['point', 1, 40], ['point', 4, 23.33], ['point', 4, 43.33], ['point', 1, 60]]);
+    assert.deepEqual(JSON.parse(band.color).coordinates, [1, 0, 4, 0]);
+
+    plugin.history.fill(0, current, current + pitchCount);
+    context.events.length = 0;
+    plugin._paintVolumeColumns(3, 1);
+    assert.deepEqual(shapes().map(shape => shape.path), [[['ellipse', 1, 50, 3, 10]]]);
+});
+
+test('incremental Volume redraw matches the full redraw of the latest frame', async () => {
+    const plugin = await loadPlugin();
+    const context = createVolumeContext();
+    const shapes = () => context.events.filter(event => event.type === 'shape');
     plugin.vl = true;
     plugin.pr = 'High';
     plugin.mn = 21;
     plugin.mx = 22;
     plugin.volumeHistoryCanvas = { width: historyWidth, height: 20, getContext: () => context };
+    plugin.writeColumn = 1;
     plugin.history[4] = 1;
     plugin.levelHistory[4] = 1;
     plugin.volumeHistoryDirty = true;
     plugin._paintVolumeHistory(20, plugin._displayPalette());
-    const fullRedraw = rasterizeColumn();
+    const fullRedraw = shapes();
 
-    fills.length = 0;
+    context.events.length = 0;
     plugin._paintVolumeColumns(0, 1);
-    assert.deepEqual(rasterizeColumn(), fullRedraw);
-    assert.match(fullRedraw[8], /rgba\(0, 255, 0, 1\)/);
+    assert.deepEqual(shapes(), fullRedraw);
+    assert.match(fullRedraw[0].color, /rgba\(0, 255, 0, 1\)/);
 });
 
 test('Volume bars use theme-appropriate compositing without confidence sorting', async () => {
@@ -555,20 +613,13 @@ test('Volume bars use theme-appropriate compositing without confidence sorting',
         { background: [255, 255, 255], composite: 'darken' }
     ]) {
         const plugin = await loadPlugin({ background });
-        const fills = [];
-        const context = {
-            globalCompositeOperation: 'source-over',
-            createLinearGradient(...coordinates) { return createGradient('linear', coordinates); },
-            fillRect(x, y, width, height) {
-                fills.push({ x, y, width, height, color: styleSignature(this.fillStyle),
-                    composite: this.globalCompositeOperation });
-            }
-        };
+        const context = createVolumeContext();
         plugin.vl = true;
         plugin.cl = 'Rainbow';
         plugin.mn = 24;
         plugin.mx = 25;
         plugin.graphDpr = 2;
+        plugin.writeColumn = 1;
         plugin.volumeHistoryCanvas = { width: historyWidth, height: 20, getContext: () => context };
         const cPitch = (24 - 21) * fineDivisions;
         const sharpPitch = (25 - 21) * fineDivisions;
@@ -578,18 +629,18 @@ test('Volume bars use theme-appropriate compositing without confidence sorting',
         plugin.levelHistory[sharpPitch] = 1;
 
         const verifyOrder = () => {
-            const guide = fills.findIndex(fill => fill.color === 'stub:graph-grid-strong');
-            const bars = fills.map((fill, index) => ({ ...fill, index }))
-                .filter(fill => fill.color.startsWith('{'));
+            const guide = context.events.findIndex(event => event.color === 'stub:graph-grid-strong');
+            const bars = context.events.map((event, index) => ({ ...event, index }))
+                .filter(event => event.type === 'shape');
             assert.equal(bars.length, 2);
             assert.ok(guide >= 0 && guide < bars[0].index);
-            for (const fill of fills) {
-                assert.equal(fill.composite, fill.color.startsWith('{') ? composite : 'source-over');
+            for (const event of context.events) {
+                assert.equal(event.composite, event.type === 'shape' ? composite : 'source-over');
             }
             assert.equal(context.globalCompositeOperation, 'source-over');
         };
-        const layerColors = () => fills.map(fill => fill.color).filter(color =>
-            color === 'stub:graph-grid-strong' || color.startsWith('{'));
+        const layerColors = () => context.events.map(event => event.color).filter(color =>
+            color === 'stub:graph-grid-strong' || color.startsWith('rgba('));
 
         plugin.volumeHistoryDirty = true;
         plugin._paintVolumeHistory(20, plugin._displayPalette());
@@ -599,7 +650,7 @@ test('Volume bars use theme-appropriate compositing without confidence sorting',
         assert.ok(bars[0].confidence > bars[1].confidence);
         const fullRedraw = layerColors();
 
-        fills.length = 0;
+        context.events.length = 0;
         plugin._paintVolumeColumns(0, 1);
         verifyOrder();
         assert.deepEqual(layerColors(), fullRedraw);
@@ -674,6 +725,7 @@ test('Volume meter remains above the bars and graph-side in both layouts', async
         plugin.ly = layout;
         plugin.volumeHistoryDirty = true;
         plugin.canvasCtx = {
+        ...keyShadingStubs,
             save() { stack.push({ angle, origin }); },
             restore() { ({ angle, origin } = stack.pop()); },
             translate(x, y) { origin = point(x, y); },
@@ -880,6 +932,7 @@ test('piano roll draws note boundaries and applies pitch colors to presence hist
     plugin.tempCanvas.width = historyWidth;
     plugin.tempCanvas.height = pitchCount;
     plugin.canvasCtx = {
+        ...keyShadingStubs,
         fillRect(x, y, width, height) {
             if (x > 0) fills.push({ x, y, width, height, color: this.fillStyle });
         },
@@ -890,15 +943,17 @@ test('piano roll draws note boundaries and applies pitch colors to presence hist
         fillText() {},
         measureText() { return { width: 10 }; }
     };
+    const { blackDepth } = FrequencyAxis.keyboardDepths(12 * 5, 1024);
     const keyColor = pitch => {
         const midi = 21 + pitch;
         const pitchClass = midi % 12;
         if ([1, 3, 6, 8, 10].includes(pitchClass)) {
-            return fills.find(fill => fill.width === 28 && fill.y === (108 - midi) * 5)?.color;
+            return fills.find(fill => Math.abs(fill.width - blackDepth) < 1e-9 &&
+                fill.y === (108 - midi) * 5)?.color;
         }
         const whiteMidis = Array.from({ length: noteCount }, (_, index) => 21 + index)
             .filter(note => ![1, 3, 6, 8, 10].includes(note % 12));
-        return fills.filter(fill => fill.width > 28)[whiteMidis.indexOf(midi)]?.color;
+        return fills.filter(fill => fill.width > blackDepth)[whiteMidis.indexOf(midi)]?.color;
     };
     const draw = () => { fills.length = 0; lines.length = 0; plugin.drawGraph(); };
     // The newest column is the last buffer column after the ring wraps.
@@ -909,10 +964,10 @@ test('piano roll draws note boundaries and applies pitch colors to presence hist
     plugin.history[0] = 0.75;
     draw();
     assert.equal(keyColor(0), 'rgb(129, 107, 168)');
-    assert.equal(keyColor(1), 'rgb(94, 67, 91)');
-    assert.equal(keyColor(2), 'rgb(208, 190, 196)');
-    assert.equal(keyColor(3), 'rgb(221, 221, 221)');
-    assert.equal(keyColor(4), 'rgb(34, 34, 34)');
+    assert.equal(keyColor(1), 'rgb(85, 58, 83)');
+    assert.equal(keyColor(2), 'rgb(220, 203, 208)');
+    assert.equal(keyColor(3), 'rgb(238, 238, 238)');
+    assert.equal(keyColor(4), 'rgb(17, 17, 17)');
     assert.deepEqual(lines.filter(line => line.color === 'stub:graph-grid-strong').map(line => line.y),
         [425, 365, 305, 245, 185, 125, 65, 5]);
     assert.deepEqual(lines.filter(line => line.color === 'stub:graph-grid-subtle').map(line => line.y),
@@ -958,17 +1013,17 @@ test('piano roll draws note boundaries and applies pitch colors to presence hist
 
     plugin.writeColumn = 1;
     draw();
-    assert.equal(keyColor(0), 'rgb(152, 136, 181)');
+    assert.equal(keyColor(0), 'rgb(156, 140, 186)');
     plugin.setParameters({ cf: 1 });
     draw();
-    assert.equal(keyColor(0), 'rgb(152, 136, 181)');
+    assert.equal(keyColor(0), 'rgb(156, 140, 186)');
 
     plugin.reset();
     plugin.ly = 'Vertical';
     plugin.vl = false;
     plugin.setParameters({ pr: 'High', mn: 21, mx: 108 });
     draw();
-    assert.equal(keyColor(0), 'rgb(221, 221, 221)');
+    assert.equal(keyColor(0), 'rgb(238, 238, 238)');
 });
 
 test('pitch resolution switches between five-cell history and semitone bag rows', async () => {
@@ -1033,6 +1088,7 @@ test('layouts rotate the same piano keyboard while keeping labels upright', asyn
     plugin.tempCtx = { putImageData() {} };
     plugin.tempCanvas = {};
     plugin.canvasCtx = {
+        ...keyShadingStubs,
         save() { stack.push({ angle, origin }); },
         restore() { ({ angle, origin } = stack.pop()); },
         translate(x, y) { origin = point(x, y); },
@@ -1069,8 +1125,11 @@ test('layouts rotate the same piano keyboard while keeping labels upright', asyn
     const writeColumn = plugin.writeColumn;
     // Changing layout redraws even when animation is stopped.
     plugin.setParameters({ ly: 'Horizontal' });
-    const blackKeys = fills.filter(fill => Math.abs(fill.width - 28) < 1e-6);
-    const whiteKeys = fills.filter(fill => Math.abs(fill.width - 44.8) < 1e-6);
+    // Horizontal: 88 rows of 10 px across the 880 px width, keys 440 px deep at most.
+    const { gutter, blackDepth } = FrequencyAxis.keyboardDepths(12 * 10, 440);
+    const rollHeight = 440 - gutter;
+    const blackKeys = fills.filter(fill => Math.abs(fill.width - blackDepth) < 1e-6);
+    const whiteKeys = fills.filter(fill => Math.abs(fill.width - gutter) < 1e-6);
     assert.equal(blackKeys.length, 36);
     assert.equal(whiteKeys.length, 52);
     const blackKeyPitches = Array.from({ length: noteCount }, (_, pitch) => pitch)
@@ -1078,8 +1137,8 @@ test('layouts rotate the same piano keyboard while keeping labels upright', asyn
     blackKeys.forEach((key, index) => {
         assert.ok(Math.abs(key.center[0] - (blackKeyPitches[index] + 0.5) * 10) < 1e-6);
     });
-    assert.ok(blackKeys.every(key => Math.abs(key.center[1] - 409.2) < 1e-6));
-    assert.ok(whiteKeys.every(key => Math.abs(key.center[1] - 417.6) < 1e-6));
+    assert.ok(blackKeys.every(key => Math.abs(key.center[1] - (rollHeight + blackDepth / 2)) < 1e-6));
+    assert.ok(whiteKeys.every(key => Math.abs(key.center[1] - (440 - gutter / 2)) < 1e-6));
     assert.equal(whiteKeys[0].color, 'rgb(0, 255, 0)');
     for (let octave = 0; octave < 7; octave++) {
         const cKey = whiteKeys[2 + octave * 7];
@@ -1097,17 +1156,17 @@ test('layouts rotate the same piano keyboard while keeping labels upright', asyn
         Math.abs(line.start[1] - line.end[1]) < 1e-6 &&
         Math.abs(line.start[0] - line.end[0]) > 1e-6
     );
-    assert.ok(horizontalLines.every(line => Math.abs(line.start[1] - 395.2) < 1e-6));
+    assert.ok(horizontalLines.every(line => Math.abs(line.start[1] - rollHeight) < 1e-6));
     assert.deepEqual(labels.map(label => label.text), ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7']);
     assert.ok(labels[0].position[0] < labels.at(-1).position[0]);
-    assert.ok(Math.abs(images.at(-1).end[1] - 395.2) < 1e-6);
+    assert.ok(Math.abs(images.at(-1).end[1] - rollHeight) < 1e-6);
     const previousY = images[0].start[1];
     now += plugin.columnPeriod * 500;
     images.length = 0;
     plugin.drawGraph();
     assert.ok(images[0].start[1] < previousY);
-    assert.ok(Math.abs(images[0].start[1] - previousY + 0.5 * 395.2 / historyWidth) < 1e-6);
-    assert.ok(Math.abs(images.at(-1).end[1] - 395.2) < 1e-6);
+    assert.ok(Math.abs(images[0].start[1] - previousY + 0.5 * rollHeight / historyWidth) < 1e-6);
+    assert.ok(Math.abs(images.at(-1).end[1] - rollHeight) < 1e-6);
     assert.equal(stack.length, 0);
     assert.equal(angle, 0);
     assert.deepEqual(origin, [0, 0]);
@@ -1118,14 +1177,18 @@ test('layouts rotate the same piano keyboard while keeping labels upright', asyn
     fills.length = 0;
     labels.length = 0;
     plugin.setParameters({ ly: 'Vertical' });
-    const verticalBlackKeys = fills.filter(fill => Math.abs(fill.width - 28) < 1e-6);
-    const verticalWhiteKeys = fills.filter(fill => Math.abs(fill.width - 44.8) < 1e-6);
+    // Vertical: 69 rows across the 440 px height, keys 880 px deep at most.
+    const vertical = FrequencyAxis.keyboardDepths(12 * 440 / 69, 880);
+    const verticalBlackKeys = fills.filter(fill => Math.abs(fill.width - vertical.blackDepth) < 1e-6);
+    const verticalWhiteKeys = fills.filter(fill => Math.abs(fill.width - vertical.gutter) < 1e-6);
     assert.ok(verticalBlackKeys.length > 0);
     assert.ok(verticalWhiteKeys.length > 0);
-    assert.ok(verticalBlackKeys.every(key => Math.abs(key.center[0] - 849.2) < 1e-6));
-    assert.ok(verticalWhiteKeys.every(key => Math.abs(key.center[0] - 857.6) < 1e-6));
+    assert.ok(verticalBlackKeys.every(key =>
+        Math.abs(key.center[0] - (880 - vertical.gutter + vertical.blackDepth / 2)) < 1e-6));
+    assert.ok(verticalWhiteKeys.every(key => Math.abs(key.center[0] - (880 - vertical.gutter / 2)) < 1e-6));
     assert.ok(labels.every(label => Math.abs(label.angle) < 1e-6));
-    assert.ok(labels.every(label => Math.abs(label.position[0] - 871.6) < 1e-6));
+    assert.ok(labels.every(label =>
+        Math.abs(label.position[0] - (880 - (vertical.gutter - vertical.blackDepth) / 2)) < 1e-6));
     const verticalRowHeight = plugin.canvas.height / (plugin.mx - plugin.mn + 1);
     labels.forEach(label => {
         const midi = (Number(label.text.slice(1)) + 1) * 12;
@@ -1170,12 +1233,14 @@ test('piano roll scrolls by monotonic fractional time and freezes across pauses'
     plugin.tempCtx = { putImageData() {} };
     plugin.tempCanvas = {};
     plugin.canvasCtx = {
+        ...keyShadingStubs,
         fillRect() {},
         drawImage(...args) { drawCalls.push(args); },
         beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fillText() {},
         measureText() { return { width: 10 }; }
     };
-    const rollWidth = plugin.canvas.width - 44.8;
+    const rollWidth = plugin.canvas.width - FrequencyAxis.keyboardDepths(
+        12 * 440 / (plugin.mx - plugin.mn + 1), 1024).gutter;
     const historySources = split => {
         plugin.writeColumn = split;
         drawCalls.length = 0;
@@ -1303,6 +1368,7 @@ test('pitch bands, white keys and Normal confidence gradients follow the theme',
             plugin.canvas = { width: 1024, height: 440 };
             const fills = [];
             plugin.canvasCtx = {
+        ...keyShadingStubs,
                 fillRect(x) { if (x > 0) fills.push(this.fillStyle); },
                 drawImage() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fillText() {},
                 save() {}, restore() {}, translate() {}, rotate() {}, measureText() { return { width: 8 }; }
@@ -1316,8 +1382,8 @@ test('pitch bands, white keys and Normal confidence gradients follow the theme',
             };
             assert.deepEqual(pixel(whitePitch), [...theme.background, 255], theme.name + ' white band');
             assert.deepEqual(pixel(blackPitch), [...theme.blackBand, 255], theme.name + ' black band');
-            const whiteKey = theme.name === 'Midnight' ? [221, 221, 221] : [255, 255, 255];
-            const blackKey = [34, 34, 34];
+            const whiteKey = theme.name === 'Midnight' ? [238, 238, 238] : [255, 255, 255];
+            const blackKey = [17, 17, 17];
             for (const layout of ['Horizontal', 'Vertical']) {
                 plugin.ly = layout;
                 fills.length = 0;

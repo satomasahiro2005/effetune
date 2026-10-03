@@ -226,20 +226,24 @@ class ChromaSpiralPlugin extends PluginBase {
         this.ensureDspTelemetrySubscription();
         const container = document.createElement('div');
         container.className = 'plugin-parameter-ui';
-        container.appendChild(this.createRadioGroup('Color', [
+        // Two columns on desktop, one on mobile (css/effetune.css and css/effetune-mobile.css).
+        const parameters = document.createElement('div');
+        parameters.className = 'analyzer-parameters';
+        parameters.appendChild(this.createRadioGroup('Color', [
             { value: 0, label: 'Normal' }, { value: 1, label: 'Normal 2' },
             { value: 2, label: 'Note Colors' }
         ], this.dm, value => this.setParameters({ dm: Number(value) }), 'dm'));
-        container.appendChild(this.createParameterControl('Lowest Octave', 1, 8, 1, this.lo,
+        parameters.appendChild(this.createParameterControl('Lowest Octave', 1, 8, 1, this.lo,
             value => this.setParameters({ lo: value }), '', 'lo'));
-        container.appendChild(this.createParameterControl('Highest Octave', 1, 9, 1, this.hi,
+        parameters.appendChild(this.createParameterControl('Highest Octave', 1, 9, 1, this.hi,
             value => this.setParameters({ hi: value }), '', 'hi'));
-        container.appendChild(this.createParameterControl('Frequency Tilt', -6, 6, 0.5, this.ft,
+        parameters.appendChild(this.createParameterControl('Frequency Tilt', -6, 6, 0.5, this.ft,
             value => this.setParameters({ ft: value }), 'dB/oct', 'ft'));
-        container.appendChild(this.createParameterControl('Level Range', 6, 96, 1, this.lr,
+        parameters.appendChild(this.createParameterControl('Level Range', 6, 96, 1, this.lr,
             value => this.setParameters({ lr: value }), 'dB', 'lr'));
-        container.appendChild(this.createParameterControl('Display Floor', -120, -24, 1, this.df,
+        parameters.appendChild(this.createParameterControl('Display Floor', -120, -24, 1, this.df,
             value => this.setParameters({ df: value }), 'dB', 'df'));
+        container.appendChild(parameters);
         const graph = this.createResponsiveGraph({
             maxWidth: 640, aspectRatio: '1 / 1', mobileAspectRatio: '1 / 1',
             onResize: ({ canvas, dpr }) => {
@@ -269,6 +273,12 @@ class ChromaSpiralPlugin extends PluginBase {
             this.startAnimation();
         }
         this.drawGraph();
+        this._graphReadout = window.GraphReadout?.attach({
+            mount: graph.container,
+            surface: this.canvas,
+            read: (x, y) => this._readSpiral(x, y),
+            crosshair: 'none'
+        });
         return container;
     }
 
@@ -288,19 +298,28 @@ class ChromaSpiralPlugin extends PluginBase {
     }
 
     drawGraph() {
-        if (!this.canvas || !this.canvasCtx) return;
+        if (!this.canvas || !this.canvasCtx) {
+            this._graphReadout?.refresh();
+            return;
+        }
         const ctx = this.canvasCtx;
         const width = this.canvas.width;
         const height = this.canvas.height;
         const dpr = this.graphDpr;
         const fontSize = 12 * dpr;
         const { outer, inner, pitch, midiLow, midiEnd } = this.getSpiralGeometry(width, height, dpr);
-        if (outer <= 0) return;
         const palette = name => (this.displayOptions?.themePalette ?? window.ThemePalette)?.get(name) ?? '';
         if (this.displayOptions?.transparent) ctx.clearRect(0, 0, width, height);
         else {
             ctx.fillStyle = palette('graph-bg-deep');
             ctx.fillRect(0, 0, width, height);
+        }
+        const frame = (this._readoutFrame ??= {});
+        Object.assign(frame, { valid: outer > inner, centerX: width / 2, centerY: height / 2,
+            inner, pitch, midiLow, midiEnd });
+        if (outer <= inner) {
+            this._graphReadout?.refresh();
+            return;
         }
         ctx.save();
         ctx.translate(width / 2, height / 2);
@@ -353,13 +372,14 @@ class ChromaSpiralPlugin extends PluginBase {
                         x: base.x + Math.sin(base.angle) * length,
                         y: base.y - Math.cos(base.angle) * length };
                 });
-                if (this.displayOptions?.signalColor) {
+                if (this.displayOptions?.signalColor || this.displayOptions?.spiralFillColor) {
                     for (let i = 1; i < points.length; i++) {
                         const before = points[i - 1], after = points[i];
-                        const color = this.displayOptions.signalColor((before.midi + after.midi) / 2,
+                        const midi = (before.midi + after.midi) / 2;
+                        const color = this.displayOptions.signalColor?.(midi,
                             (before.intensity + after.intensity) / 2);
-                        if (!color.alpha) continue;
-                        ctx.fillStyle = color.css;
+                        if (color && !color.alpha) continue;
+                        ctx.fillStyle = color?.css ?? this.displayOptions.spiralFillColor(midi);
                         ctx.beginPath();
                         ctx.moveTo(before.baseX, before.baseY);
                         ctx.lineTo(before.x, before.y);
@@ -398,12 +418,62 @@ class ChromaSpiralPlugin extends PluginBase {
             }
             if (pitch >= fontSize + 2 * dpr) {
                 ctx.textAlign = 'right';
+                // Octave numbers sit on the spiral itself; a Visualizer palette can match the text color.
+                const outline = this.displayOptions?.visualizerAxisLabels;
+                ctx.strokeStyle = palette('graph-bg-deep');
+                ctx.lineWidth = 2 * dpr;
+                ctx.lineJoin = 'round';
                 for (let octave = this.lo; octave <= this.hi; octave++) {
-                    textContext.fillText(String(octave), -6 * dpr, -inner - (octave - this.lo) * pitch);
+                    const y = -inner - (octave - this.lo) * pitch;
+                    if (outline) textContext.strokeText(String(octave), -6 * dpr, y);
+                    textContext.fillText(String(octave), -6 * dpr, y);
                 }
             }
         }
         ctx.restore();
+        this._graphReadout?.refresh();
+    }
+
+    // Snaps canvas pixel (x, y) to the nearest drawn spiral cell.
+    _readSpiral(x, y) {
+        const frame = this._readoutFrame;
+        if (!frame?.valid) return null;
+        const { format } = window.GraphReadout;
+        const { inner, pitch, midiLow } = frame;
+        const dx = x - frame.centerX;
+        const dy = y - frame.centerY;
+        const phase = (Math.atan2(dx, -dy) / (2 * Math.PI) + 1) % 1;
+        const turn = Math.round((Math.hypot(dx, dy) - inner) / pitch - phase);
+        const midi = midiLow + (turn + phase) * 12;
+        if (midi < midiLow - 0.5 || midi > frame.midiEnd) return null;
+        let cell = null;
+        for (const candidate of this.display ?? []) {
+            if (!cell || Math.abs(candidate.midi - midi) < Math.abs(cell.midi - midi)) cell = candidate;
+        }
+        const cellMidi = cell && Math.abs(cell.midi - midi) <= 0.5 ? cell.midi : midi;
+        const frequency = 440 * 2 ** ((cellMidi - 69) / 12);
+        const cursor = `${format.note(frequency, 440)} · ${format.frequency(frequency)}`;
+        const base = ChromaSpiralPlugin.spiralPoint(cellMidi, midiLow, inner, pitch);
+        const at = { x: frame.centerX + base.x, y: frame.centerY + base.y };
+        if (cellMidi !== cell?.midi) return { cursor, rows: [{ label: 'Level', value: format.percent(NaN) }], at };
+        const intensity = window.NoteSpectrogramPlugin.normalizedLevel(cell.level, this.levelReference, this.lr, this.df);
+        if (this.dm === 1) {
+            // Normal 2 draws the level as a radial line, so the dot sits on its tip.
+            at.x += Math.sin(base.angle) * intensity * pitch;
+            at.y -= Math.cos(base.angle) * intensity * pitch;
+        }
+        return {
+            cursor,
+            at,
+            rows: [{
+                label: 'Level',
+                color: this.dm === 2
+                    ? `rgb(${window.NoteSpectrogramPlugin.noteColors[Math.round(cell.midi) % 12].join(',')})` // theme-allow: Shared semantic note colors.
+                    : 'var(--et-graph-trace)',
+                value: format.percent(intensity),
+                y: at.y
+            }]
+        };
     }
 
     cleanup() {

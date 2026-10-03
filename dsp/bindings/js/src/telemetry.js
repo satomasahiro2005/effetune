@@ -6,6 +6,17 @@ const SPECTROGRAM_FRAME = 5;
 const STEREO_FRAME = 6;
 const NOTE_SPECTROGRAM_FRAME = 24;
 const PITCH_METER_FRAME = 26;
+const ANALOG_METER_FRAME = 27;
+const RHYTHM_ANALYZER_FRAME = 28;
+const RHYTHM_ANALYZER_PAYLOAD_BYTES = 1344;
+const RHYTHM_ANALYZER_TEMPOGRAM_BINS = 192;
+const RHYTHM_ANALYZER_MAX_EVENTS = 16;
+const TONAL_BALANCE_FRAME = 29;
+const TONAL_BALANCE_PAYLOAD_BYTES = 1564;
+const TONAL_BALANCE_BANDS = 41;
+const TONAL_BALANCE_GRID_POINTS = 128;
+const ANALOG_METER_LOUDNESS_MODE = 5;
+const ANALOG_METER_MIN_DB = -240;
 const PITCH_METER_MIN_DETECTED_MIDI = 20.5;
 const PITCH_METER_MAX_DETECTED_MIDI = 108.5;
 const MULTIRES_HQ_HEADER_BYTES = 48;
@@ -15,14 +26,17 @@ const MULTIRES_HQ_SPECTRUM_CELLS = 2048;
 const MULTIRES_HQ_SPECTROGRAM_CELLS = 256;
 
 const ANALYZER_FRAMES = Object.freeze({
+  AnalogMeter: [ANALOG_METER_FRAME, [1]],
   ChromaSpiral: [SPECTRUM_FRAME, [2]],
   LevelMeter: [LEVEL_FRAME, [1]],
   NoteSpectrogram: [NOTE_SPECTROGRAM_FRAME, [3]],
   Oscilloscope: [SCOPE_FRAME, [2]],
   PitchMeter: [PITCH_METER_FRAME, [1]],
+  RhythmAnalyzer: [RHYTHM_ANALYZER_FRAME, [1]],
   SpectrumAnalyzer: [SPECTRUM_FRAME, [1, 2]],
   Spectrogram: [SPECTROGRAM_FRAME, [1, 2]],
-  StereoMeter: [STEREO_FRAME, [2]]
+  StereoMeter: [STEREO_FRAME, [2]],
+  TonalBalanceEQ: [TONAL_BALANCE_FRAME, [1]]
 });
 
 export const TELEMETRY_RING_BYTES = 256 * 1024;
@@ -392,6 +406,149 @@ function decodePitchMeter(payload, node, sequence, dropped) {
   };
 }
 
+function decodeAnalogMeter(payload, node, sequence, dropped) {
+  if (payload.byteLength < 12) return null;
+  const mode = payload.getUint8(0);
+  const channelCount = payload.getUint8(1);
+  const flags = payload.getUint16(2, true);
+  const loudness = mode === ANALOG_METER_LOUDNESS_MODE;
+  const programOffset = 4 + channelCount * 8;
+  if (mode > ANALOG_METER_LOUDNESS_MODE || channelCount < 1 || channelCount > 16 ||
+      (flags & ~(loudness ? 3 : 0)) !== 0 ||
+      payload.byteLength !== programOffset + (loudness ? 24 : 0)) {
+    return null;
+  }
+  const level = offset => {
+    const value = payload.getFloat32(offset, true);
+    return Number.isFinite(value) && value >= ANALOG_METER_MIN_DB ? value : null;
+  };
+  const channels = new Array(channelCount);
+  for (let channel = 0; channel < channelCount; channel++) {
+    const needleDb = level(4 + channel * 8);
+    const maxDb = level(8 + channel * 8);
+    if (needleDb === null || maxDb === null) return null;
+    channels[channel] = { needleDb, maxDb };
+  }
+  const integratedValid = (flags & 1) !== 0;
+  const lraValid = (flags & 2) !== 0;
+  let program = null;
+  if (loudness) {
+    const momentary = level(programOffset);
+    const shortTerm = level(programOffset + 4);
+    const integrated = payload.getFloat32(programOffset + 8, true);
+    const lra = payload.getFloat32(programOffset + 12, true);
+    const maxTruePeak = level(programOffset + 16);
+    const integratedSeconds = payload.getFloat32(programOffset + 20, true);
+    if (momentary === null || shortTerm === null || maxTruePeak === null ||
+        !Number.isFinite(integratedSeconds) || integratedSeconds < 0 ||
+        (integratedValid
+          ? !Number.isFinite(integrated) || integrated < ANALOG_METER_MIN_DB
+          : integrated !== 0) ||
+        (lraValid ? !Number.isFinite(lra) || lra < 0 : lra !== 0)) {
+      return null;
+    }
+    program = { momentary, shortTerm, integrated, lra, maxTruePeak, integratedSeconds };
+  }
+  return {
+    ...common(node, 'analogMeter', sequence, dropped),
+    mode,
+    channelCount,
+    integratedValid,
+    lraValid,
+    channels,
+    program
+  };
+}
+
+function decodeRhythmAnalyzer(payload, node, sequence, dropped) {
+  if (payload.byteLength !== RHYTHM_ANALYZER_PAYLOAD_BYTES) return null;
+  const f32 = offset => payload.getFloat32(offset, true);
+  const u32 = offset => payload.getUint32(offset, true);
+  const sampleRate = f32(0);
+  const generation = u32(4);
+  const envelopeHopSamples = u32(8);
+  const envelopeFrameCount = u32(12);
+  const timeSeconds = f32(16);
+  const latencySeconds = f32(20);
+  const droppedEvents = u32(24);
+  const eventCount = u32(28);
+  const trackerFlags = u32(32);
+  const locked = (trackerFlags & 1) !== 0;
+  const lockEpoch = u32(36);
+  const confidence = f32(40);
+  const periodSeconds = f32(44);
+  const nextBeatFrame = u32(48);
+  const nextBeatFraction = f32(52);
+  const nextBeatIndex = u32(56);
+  const combBestBpm = f32(60);
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0 || generation === 0 ||
+      envelopeHopSamples === 0 || !Number.isFinite(timeSeconds) ||
+      !Number.isFinite(latencySeconds) || latencySeconds < 0 ||
+      eventCount > RHYTHM_ANALYZER_MAX_EVENTS || (trackerFlags & ~1) !== 0 ||
+      !Number.isFinite(confidence) || confidence < 0 ||
+      !Number.isFinite(combBestBpm) || combBestBpm < 0 ||
+      (locked
+        ? !Number.isFinite(periodSeconds) || periodSeconds <= 0 ||
+          !(nextBeatFraction >= 0 && nextBeatFraction < 1)
+        : periodSeconds !== 0 || nextBeatFrame !== 0 || nextBeatFraction !== 0 ||
+          nextBeatIndex !== 0)) {
+    return null;
+  }
+  const tempogram = new Float32Array(RHYTHM_ANALYZER_TEMPOGRAM_BINS);
+  for (let bin = 0; bin < RHYTHM_ANALYZER_TEMPOGRAM_BINS; bin++) {
+    const value = f32(64 + bin * 4);
+    if (!(value >= 0 && value <= 1)) return null;
+    tempogram[bin] = value;
+  }
+  const events = new Array(eventCount);
+  for (let index = 0; index < eventCount; index++) {
+    const offset = 832 + index * 32;
+    const fraction = f32(offset + 4);
+    const beatFraction = f32(offset + 16);
+    const eventPeriod = f32(offset + 20);
+    const strength = f32(offset + 24);
+    const band = payload.getUint8(offset + 28);
+    const flags = payload.getUint8(offset + 29);
+    if (!(fraction >= 0 && fraction < 1) || !(beatFraction >= 0 && beatFraction < 1) ||
+        !Number.isFinite(eventPeriod) || eventPeriod < 0 ||
+        !Number.isFinite(strength) || strength <= 0 || band > 2 ||
+        (flags & ~1) !== 0 || payload.getUint16(offset + 30, true) !== 0) {
+      return null;
+    }
+    events[index] = {
+      frame: u32(offset),
+      fraction,
+      lockEpoch: u32(offset + 8),
+      beatIndex: payload.getInt32(offset + 12, true),
+      beatFraction,
+      periodSeconds: eventPeriod,
+      strength,
+      band,
+      unlocked: (flags & 1) !== 0
+    };
+  }
+  return {
+    ...common(node, 'rhythmAnalyzer', sequence, dropped),
+    sampleRate,
+    generation,
+    envelopeHopSamples,
+    envelopeFrameCount,
+    timeSeconds,
+    latencySeconds,
+    droppedEvents,
+    locked,
+    lockEpoch,
+    confidence,
+    periodSeconds,
+    nextBeatFrame,
+    nextBeatFraction,
+    nextBeatIndex,
+    combBestBpm,
+    tempogram,
+    events
+  };
+}
+
 function decodeStereo(payload, node, sequence, dropped) {
   if (payload.byteLength < 1464) return null;
   const sampleRate = payload.getFloat32(0, true);
@@ -441,6 +598,66 @@ function decodeStereo(payload, node, sequence, dropped) {
   };
 }
 
+function decodeTonalBalance(payload, node, sequence, dropped) {
+  if (payload.byteLength !== TONAL_BALANCE_PAYLOAD_BYTES) return null;
+  const sampleRate = payload.getFloat32(0, true);
+  const stateFlags = payload.getUint8(8);
+  const loudnessValid = (stateFlags & 4) !== 0;
+  const loudnessLkfs = payload.getFloat32(12, true);
+  const makeupDb = payload.getFloat32(16, true);
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0 ||
+      payload.getUint16(4, true) !== TONAL_BALANCE_BANDS ||
+      payload.getUint16(6, true) !== TONAL_BALANCE_GRID_POINTS ||
+      (stateFlags & ~15) !== 0 || payload.getUint16(10, true) !== 0 ||
+      (loudnessValid ? !Number.isFinite(loudnessLkfs) : loudnessLkfs !== 0) ||
+      !Number.isFinite(makeupDb) ||
+      payload.getUint8(1049) !== 0 || payload.getUint16(1050, true) !== 0) {
+    return null;
+  }
+  const floats = (offset, count, min = -Infinity, max = Infinity) => {
+    const values = new Float32Array(count);
+    for (let index = 0; index < count; index++) {
+      const value = payload.getFloat32(offset + index * 4, true);
+      if (!Number.isFinite(value) || value < min || value > max) return null;
+      values[index] = value;
+    }
+    return values;
+  };
+  const levelDb = floats(24, TONAL_BALANCE_BANDS);
+  const persistence = floats(188, TONAL_BALANCE_BANDS, 0, 1);
+  const presence = floats(352, TONAL_BALANCE_BANDS, 0, 1);
+  const commandDb = floats(516, TONAL_BALANCE_BANDS);
+  const targetMuDb = floats(680, TONAL_BALANCE_BANDS);
+  const targetSigmaDb = floats(844, TONAL_BALANCE_BANDS, 0);
+  const responseDb = floats(1052, TONAL_BALANCE_GRID_POINTS);
+  const bandFlags = new Uint8Array(payload.buffer, payload.byteOffset + 1008, TONAL_BALANCE_BANDS)
+    .slice();
+  if (!levelDb || !persistence || !presence || !commandDb || !targetMuDb ||
+      !targetSigmaDb || !responseDb || bandFlags.some(flags => (flags & ~31) !== 0)) {
+    return null;
+  }
+  return {
+    ...common(node, 'tonalBalance', sequence, dropped),
+    sampleRate,
+    targetIndex: payload.getUint8(9),
+    absoluteGate: (stateFlags & 1) !== 0,
+    relativeGate: (stateFlags & 2) !== 0,
+    loudnessValid,
+    targetValid: (stateFlags & 8) !== 0,
+    loudnessLkfs,
+    makeupDb,
+    gatedHopCount: payload.getUint32(20, true),
+    levelDb,
+    persistence,
+    presence,
+    commandDb,
+    targetMuDb,
+    targetSigmaDb,
+    bandFlags,
+    responseDb
+  };
+}
+
 function decodePayload(frameType, formatVersion, payload, node, sequence, dropped) {
   if (formatVersion === 2 &&
       (frameType === SPECTRUM_FRAME || frameType === SPECTROGRAM_FRAME)) {
@@ -461,6 +678,12 @@ function decodePayload(frameType, formatVersion, payload, node, sequence, droppe
       return decodeNoteSpectrogram(payload, node, sequence, dropped);
     case PITCH_METER_FRAME:
       return decodePitchMeter(payload, node, sequence, dropped);
+    case ANALOG_METER_FRAME:
+      return decodeAnalogMeter(payload, node, sequence, dropped);
+    case RHYTHM_ANALYZER_FRAME:
+      return decodeRhythmAnalyzer(payload, node, sequence, dropped);
+    case TONAL_BALANCE_FRAME:
+      return decodeTonalBalance(payload, node, sequence, dropped);
     default:
       return null;
   }

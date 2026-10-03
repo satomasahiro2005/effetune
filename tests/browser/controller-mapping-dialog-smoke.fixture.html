@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <base href="/">
   <title>Controller mapping dialog smoke</title>
-  <link rel="stylesheet" href="/effetune.css">
-  <link rel="stylesheet" href="/effetune-mobile.css">
+  <link rel="stylesheet" href="/css/effetune.css">
+  <link rel="stylesheet" href="/css/effetune-mobile.css">
 </head>
 <body>
   <main>Controller mapping dialog smoke fixture ready</main>
@@ -200,7 +200,7 @@
       const manager = createManager();
       const dialog = new MidiMappingDialog({ manager, windowRef });
       await dialog.open();
-      const stylesheet = document.querySelector('link[href="effetune-library.css"]');
+      const stylesheet = document.querySelector('link[href="css/effetune-library.css"]');
       if (!stylesheet.sheet) {
         await new Promise((resolve, reject) => {
           stylesheet.addEventListener('load', resolve, { once: true });

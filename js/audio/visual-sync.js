@@ -1,5 +1,6 @@
 // Deterministic capture age and staged-analysis completion bounds, in context frames.
 export const VISUAL_SYNC_MAX_OUTPUT_DELAY_SECONDS = 0.5;
+// Entries held per stream; the total grows with the number of synced streams.
 export const VISUAL_SYNC_QUEUE_LIMIT = 256;
 export const isVisualSyncEnabled = config => config?.visualSync === true;
 
@@ -35,6 +36,12 @@ function phaseSelectAge(params, sampleRate, execution) {
     return size / 2 + size / 4;
 }
 const rules = {
+    // Only windowed readings are aligned; VU, PPM, and peak ballistics are the meter definition.
+    AnalogMeterPlugin: rule((p, rate) => {
+        if (p.md === 'RMS') return Math.ceil(rate * bounded(p.it, 0.3, 0.05, 3)) / 2;
+        if (p.md === 'Loudness') return Math.ceil(rate * (p.ln === 1 ? 3 : 0.4)) / 2;
+        return 0;
+    }),
     ChromaSpiralPlugin: rule((p, rate, execution) => {
         let pt = 8;
         while (pt < 14 && rate / (4 * (1 << pt)) > 1.5) pt++;
@@ -51,6 +58,12 @@ const rules = {
         const frequency = bounded(p.rf, 440, 400, 480) * 2 ** ((Math.round(bounded(p.mn, 36, 21, 108)) - 69) / 12);
         return Math.ceil(Math.max(3.1 * rate / frequency + 4, rate * 0.015)) / 2 +
             clamp(Math.round(rate * 0.01 / 16) * 16, 16, 8192);
+    }),
+    // Half the onset STFT window plus the staged hop and the one-frame peak look-ahead.
+    RhythmAnalyzerPlugin: rule((p, rate) => {
+        const pow2 = (value, low, high) => 2 ** Math.round(Math.log2(clamp(value, low, high)));
+        const hop = pow2(0.00267 * rate, 8, 4096);
+        return Math.max(pow2(0.0213 * rate, 64, 32768), 4 * hop) / 2 + 2 * hop;
     }),
     OscilloscopePlugin: rule((p, rate) => clamp(Math.floor(rate * bounded(p.dt, 0.01, 0.001, 0.1)), 1, 65536) / 2),
     StereoMeterPlugin: rule((p, rate) => Math.ceil(rate * bounded(p.wt, 0.1, 0.01, 1)) / 2),
@@ -92,6 +105,22 @@ export function audibleContextTime({ outputTimestamp, currentTime, outputLatency
         return outputTimestamp.contextTime * 1000 + performanceTime - outputTimestamp.performanceTime;
     }
     return (currentTime - (outputLatency || baseLatency || 0)) * 1000;
+}
+
+// Frees room for one more entry of a stream in a due-sorted queue by dropping that
+// stream's earliest entry once it holds `limit` entries. A shared limit would let
+// many streams evict every entry before its deadline. Returns whether one dropped.
+export function dropVisualSyncOverflow(queue, sameStream, limit = VISUAL_SYNC_QUEUE_LIMIT) {
+    let first = -1;
+    let count = 0;
+    for (let i = 0; i < queue.length; i++) {
+        if (!sameStream(queue[i])) continue;
+        if (first < 0) first = i;
+        count++;
+    }
+    if (count < limit) return false;
+    queue.splice(first, 1);
+    return true;
 }
 
 // These payloads record capture-end time on the worklet processing timeline.

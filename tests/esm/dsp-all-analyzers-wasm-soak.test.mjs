@@ -36,6 +36,7 @@ const bandwidthTargets = new Map([
 ]);
 
 const analyzers = [
+  ['AnalogMeterPlugin', 209, 27, 1],
   ['ChromaSpiralPlugin', 208, TelemetryFrameType.TAP_SPECTRUM, 2],
   ['LevelMeterPlugin', 201, TelemetryFrameType.TAP_LEVEL, 1],
   ['OscilloscopePlugin', 202, TelemetryFrameType.TAP_SCOPE_SNAPSHOT, 2],
@@ -43,7 +44,8 @@ const analyzers = [
   ['SpectrogramPlugin', 204, TelemetryFrameType.TAP_SPECTROGRAM_COL, 1],
   ['StereoMeterPlugin', 205, TelemetryFrameType.TAP_STEREO_FIELD, 2],
   ['NoteSpectrogramPlugin', MULTI_F0_TAP_ID, 24, 3],
-  ['PitchMeterPlugin', PITCH_METER_TAP_ID, TelemetryFrameType.TAP_PITCH_METER, 1]
+  ['PitchMeterPlugin', PITCH_METER_TAP_ID, TelemetryFrameType.TAP_PITCH_METER, 1],
+  ['RhythmAnalyzerPlugin', 210, TelemetryFrameType.TAP_RHYTHM_ANALYZER, 1]
 ];
 
 function deterministicNoise(sample, channel) {

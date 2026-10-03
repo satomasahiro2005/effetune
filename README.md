@@ -18,7 +18,7 @@ A real-time audio effect processor designed for audio enthusiasts to enhance the
 
 ## Introduction video
 
-[![YouTube Video](images/video_thumbnail.jpg)](https://www.youtube.com/watch?v=--mtsy1t4HI)
+[![YouTube Video](images/video_thumbnail.jpg)](https://www.youtube.com/watch?v=Qb5Airg0kI8)
 
 ## Concept
 
@@ -61,7 +61,7 @@ Before using EffeTune, you'll need to set up your audio routing. Here's how to c
    - Or select Open music file... from the File menu (desktop app only)
    - Or drag the music file into the window
 - For player-only use, set Input Device to None (music file player only) in Audio Configuration to avoid using a live audio input
-- Open the playback speed button next to Shuffle to show its popup. Choose one of the nine presets, or use the horizontal slider or number field to set a speed from 0.25x to 4x in 0.01x steps. Playback pitch is preserved.
+- Open the playback speed button next to Shuffle to show its popup. Choose one of the nine presets, or use the horizontal slider or number field to set a speed from 0.25x to 4x in 0.01x steps. The **Preserve Pitch** button next to it is on by default, so pitch stays the same as speed changes; turn it off to let pitch rise and fall with speed, like changing the speed of a tape or record.
 - In the desktop app, choose **View > Mini Player** (Ctrl/Cmd+Shift+M) or use the player’s mini-player button to keep playback controls in a compact window. The pin button keeps it above other windows.
 
 ### Streaming Service Setup
@@ -279,6 +279,8 @@ To measure your audio system's frequency response and create a flat correction E
 4. Generate a parametric EQ correction that can be directly imported into EffeTune
 5. Apply the correction to achieve a more accurate, neutral sound reproduction
 
+Set **Output Device Channels** to match your output device: **6** for 5.1 or **8** for 7.1. Output channel and per-channel bandwidth choices stay within this range. Test signals, measurements, and individual channel remeasurement use this count even when only some channels are selected. For example, keep **6** when measuring only Ch 3 (center) and Ch 4 (subwoofer) on a 5.1 device.
+
 For a multichannel system, select **All Channels** to measure all outputs together, or select individual **Output Channel** entries to measure them one at a time. Under **Advanced Settings**, choose **Off**, **Same for All Channels**, or **Per Channel** for sweep bandwidth. With **Per Channel**, use **Channel to Configure** to set each selected output channel's frequency range. During level adjustment, **Channel Mode** starts at **Automatic Rotation**; select a test-signal channel or **Manual** when needed.
 
 If you already have an impulse-response WAV file, choose **Import** and select it. EffeTune saves each WAV channel as a measurement result, so you can select it in Room EQ and anywhere else that uses saved measurements.
@@ -336,11 +338,13 @@ If the problem persists, report it through [GitHub Issues](https://github.com/Fr
 
   | Category | Effect | Description | Documentation |
   |-----------|--------|-------------|---------------|
+  | Analyzer  | Analog Meter | Shows channel levels on a needle meter with VU, PPM, peak, and loudness scales | [Details](docs/plugins/analyzer.md#analog-meter) |
   | Analyzer  | Chroma Spiral | Shows frequency components by note and octave on a spiral | [Details](docs/plugins/analyzer.md#chroma-spiral) |
   | Analyzer  | Level Meter | Displays audio level with peak hold | [Details](docs/plugins/analyzer.md#level-meter) |
 | Analyzer  | Note Spectrogram | Shows estimated pitches over time as a scrolling piano roll | [Details](docs/plugins/analyzer.md#note-spectrogram) |
 | Analyzer  | Oscilloscope | Real-time waveform visualization | [Details](docs/plugins/analyzer.md#oscilloscope) |
 | Analyzer  | Pitch Meter | Tracks one fundamental pitch and its tuning over time | [Details](docs/plugins/analyzer.md#pitch-meter) |
+| Analyzer  | Rhythm Analyzer | Shows the tempo, the hits beat by beat, and how early or late each part plays | [Details](docs/plugins/analyzer.md#rhythm-analyzer) |
 | Analyzer  | Spectrogram | Shows frequency spectrum changes over time | [Details](docs/plugins/analyzer.md#spectrogram) |
 | Analyzer  | Spectrum Analyzer | Shows the strength of bass, mids, and treble in real time | [Details](docs/plugins/analyzer.md#spectrum-analyzer) |
 | Analyzer  | Stereo Meter | Visualizes stereo balance and channel correlation | [Details](docs/plugins/analyzer.md#stereo-meter) |
@@ -382,6 +386,7 @@ If the problem persists, report it through [GitHub Issues](https://github.com/Fr
 | EQ        | Narrow Range | Combination of high-pass and low-pass filters | [Details](docs/plugins/eq.md#narrow-range) |
 | EQ        | Room EQ      | FIR correction from saved room measurements | [Details](docs/plugins/eq.md#room-eq)      |
 | EQ        | Tilt EQ      | Tilt equalizer for quick tone shaping | [Details](docs/plugins/eq.md#tilt-eq)      |
+| EQ        | Tonal Balance EQ | Automatically corrects the long-term tonal balance toward a music-style target | [Details](docs/plugins/eq.md#tonal-balance-eq) |
 | EQ        | Tone Control | Three-band tone control | [Details](docs/plugins/eq.md#tone-control) |
 | Lo-Fi     | AM Radio Simulator | Passes music through a modeled AM broadcast and receiver chain | [Details](docs/plugins/lofi.md#am-radio-simulator) |
 | Lo-Fi     | Bit Crusher | Bit depth reduction and zero-order hold effect | [Details](docs/plugins/lofi.md#bit-crusher) |

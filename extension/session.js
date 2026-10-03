@@ -12,6 +12,7 @@ let audio;
 let stream;
 let queue = Promise.resolve();
 let telemetry = false;
+let visualizerSources = [];
 let failurePending = false;
 let status = 'stopped';
 let error = null;
@@ -35,8 +36,16 @@ function snapshot() {
 function publish() { const state = snapshot(); port.postMessage({ kind: 'state', state }); return state; }
 function forward(message) { port.postMessage({ kind: 'workletMessage', message }); }
 
+function applyVisualizerSources() {
+    // Apply sources first: AudioManager posts its own rate, which this session rate must override.
+    if (!telemetry) visualizerSources = [];
+    audio?.setVisualizerSources(visualizerSources);
+    audio?.workletNode?.port.postMessage({ type: 'dspSetTelemetryRate',
+        hz: telemetry ? (visualizerSources.length ? 60 : 30) : 0 });
+}
+
 function synchronizeTelemetry() {
-    audio?.workletNode?.port.postMessage({ type: 'dspSetTelemetryRate', hz: telemetry ? 30 : 0 });
+    applyVisualizerSources();
     audio?.powerPolicyController?.handlePageLifecycleEvent('visibilitychange', { hidden: !telemetry });
 }
 
@@ -103,7 +112,10 @@ async function initializeAudio(plugins, sampleRate, masterBypass) {
         if (powerState !== power.effectiveState) { powerState = power.effectiveState; publish(); }
     });
     synchronizeTelemetry();
-    audio.ioManager.outputGainNode.gain.setValueAtTime(1, audio.audioContext.currentTime);
+    // The worklet gate opened long before the pipeline arrived, so the live tab
+    // audio is already flowing into the muted output: fade it in once the
+    // published pipeline plays at full level.
+    await audio.fadeInOutputWhenReady();
     status = 'processing';
     return publish();
 }
@@ -115,7 +127,11 @@ async function start(args) {
             mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: args.streamId }
         }, video: false }, 10000);
         for (const track of stream.getTracks()) track.addEventListener('ended', () => {
-            if (stream) failAudio(new Error('Captured stream ended'));
+            if (!stream || !['starting', 'processing'].includes(status)) return;
+            console.info('Captured audio stream ended.');
+            queue = queue.then(() => {
+                if (['starting', 'processing'].includes(status)) return closeAudio();
+            }).catch(console.error);
         }, { once: true });
         return await initializeAudio(args.plugins, args.sampleRate, args.masterBypass);
     } catch (reason) {
@@ -148,6 +164,10 @@ async function handle(command, args) {
         telemetry = args.enabled;
         synchronizeTelemetry();
         if (telemetry) replayDspExecutionStates(audio.getDspExecutionStateSnapshot(), forward);
+    } else if (command === 'setVisualizerSources') {
+        visualizerSources = Array.isArray(args.sources) ? args.sources : [];
+        applyVisualizerSources();
+        return snapshot();
     } else if (command === 'frequencyPreview') audio.setFrequencyPreview(args.frequency);
     else if (command === 'setPipeline') await applyPipeline({ plugins: args.plugins });
     else if (command === 'setBypass') {
@@ -165,7 +185,7 @@ async function handle(command, args) {
                 ch: channelSpec ?? message.plugin.channel };
             validatePreset([next], manager, audio.audioContext.sampleRate);
             applySerializedState(plugin, next);
-        } else if (['setSpectrumTap', 'setSpectrumTapRoute', 'getPerformanceMetrics'].includes(message?.type)) {
+        } else if (['setSpectrumTap', 'setSpectrumTapRoute', 'getPerformanceMetrics', 'resetPluginState'].includes(message?.type)) {
             audio.workletNode?.port.postMessage(message);
         } else throw new Error('Unsupported worklet operation');
     } else throw new Error('Unknown session operation');

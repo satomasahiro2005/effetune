@@ -11,7 +11,7 @@ Semantic type: `Oscilloscope` · Category: analyzer
 
 Passes audio through while the host-side EffeTune app can display its waveform.
 
-Use the opt-in decoded telemetry callback or subscription API to observe this analyzer. See [Compatibility](/dsp/reference/compatibility/#analyzers-and-telemetry).
+Use the opt-in decoded telemetry callback or subscription API to observe this effect. See [Compatibility](/dsp/reference/compatibility/#analyzers-and-telemetry).
 
 ## Contract
 
@@ -19,12 +19,12 @@ Use the opt-in decoded telemetry callback or subscription API to observe this an
 - Catalog sample rates: **not declared; this does not mean unsupported**
 - Assets: **none**
 - Catalog-declared latency: **zero**
-- Analyzer telemetry: **decoded semantic observations are available**
+- Telemetry: **decoded semantic observations are available**
 
 | Semantic name | Python constructor keyword | Type / count | Default | Unit | Range or values |
 |---|---|---:|---|---|---|
 | `displayTime` | `display_time` | number / 1 | `0.01` | s | 0.001 … 0.1 |
-| `triggerMode` | `trigger_mode` | string / 1 | `"Auto"` | Not declared in catalog | `Auto`, `Normal` |
+| `triggerMode` | `trigger_mode` | string / 1 | `"Auto"` | Not declared in catalog | `Auto`, `Normal`, `Off` |
 | `triggerLevel` | `trigger_level` | number / 1 | `0` | Not declared in catalog | -1 … 1 |
 | `triggerEdge` | `trigger_edge` | string / 1 | `"Rising"` | Not declared in catalog | `Rising`, `Falling` |
 | `holdoff` | `holdoff` | number / 1 | `0.0001` | s | 0.0001 … 0.01 |
@@ -55,6 +55,7 @@ Shows the shape of the sound wave in real time, so you can see beats, sharp hits
 - **Trigger Mode**
   - Auto: Continuous updates even without trigger
   - Normal: Freezes display until next trigger
+  - Off: No trigger; continuously shows the latest waveform as it arrives. Trigger Level, Trigger Edge, and Holdoff have no effect
 - Trigger detection uses the averaged left/right waveform. Mono input is used directly.
 - **Trigger Level** - Amplitude level that starts capture
   - Range: -1 to 1 (normalized amplitude)
@@ -64,8 +65,5 @@ Shows the shape of the sound wave in real time, so you can see beats, sharp hits
 - **Holdoff** - Minimum time between triggers (0.1 to 10 ms)
 - **Display Level** - Vertical scale in dB (-96 to 0 dB)
 - **Vertical Offset** - Shifts waveform up/down (-1 to 1)
-
-### Note on Waveform Display
-The waveform connects captured points in time order. For longer display times, each interval retains its first and last samples plus the minimum and maximum samples at their original positions, preserving continuity and short peaks at display resolution. Use it as a visual guide rather than an exact measurement tool.
 
 [Back to all effects](/dsp/effects/)

@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import '../../plugins/multires-spectrum.js';
-import { createAnalyzerDisplay } from '../../js/visualizer/visualizer-analyzer-display.js';
+import { createAnalyzerDisplay, createSpectrumSmoother } from '../../js/visualizer/visualizer-analyzer-display.js';
+import { createBallistics, stepBallistics } from '../../js/visualizer/visualizer-ballistics.js';
 import { VisualizerRenderer } from '../../js/visualizer/visualizer-renderer.js';
 import { createDefaultLayout, createItem } from '../../js/visualizer/visualizer-model.js';
 import { VisualizerSources } from '../../js/visualizer/visualizer-sources.js';
@@ -25,7 +26,7 @@ function canvas() {
     }, {
         get(target, key) { return key in target ? target[key] : (...args) => calls.push([key, ...args]); },
         set(target, key, value) {
-            if (key === 'fillStyle' || key === 'strokeStyle') calls.push([key, value]);
+            if (key === 'fillStyle' || key === 'strokeStyle' || key === 'globalAlpha') calls.push([key, value]);
             target[key] = value;
             return true;
         }
@@ -35,6 +36,7 @@ function canvas() {
 
 function runtime() {
     let constructions = 0, registrations = 0;
+    const clock = { now: 1000 };
     class PluginBase {
         constructor() { constructions++; }
         registerProcessor() { registrations++; }
@@ -45,9 +47,11 @@ function runtime() {
     }
     const window = { ThemePalette: { get: name => name === 'graph-trace' ? 'rgba(0,255,0,1)' : 'rgba(16,16,16,1)' } };
     const document = { createElement: () => canvas() };
-    for (const file of ['spectrum_analyzer', 'spectrogram', 'oscilloscope', 'stereo_meter', 'note_spectrogram', 'level_meter']) {
-        vm.runInNewContext(readFileSync(new URL(`../../plugins/analyzer/${file}.js`, import.meta.url), 'utf8'),
-            { window, document, PluginBase, performance: { now: () => 1000 }, Float32Array, DataView, ArrayBuffer,
+    for (const file of ['frequency-axis', 'analyzer/spectrum_analyzer', 'analyzer/spectrogram', 'analyzer/oscilloscope', 'analyzer/stereo_meter',
+        'analyzer/note_spectrogram', 'analyzer/chroma_spiral', 'analyzer/level_meter', 'analyzer/analog_meter',
+        'analyzer/rhythm_analyzer', 'spatial/phase_select_eq']) {
+        vm.runInNewContext(readFileSync(new URL(`../../plugins/${file}.js`, import.meta.url), 'utf8'),
+            { window, document, PluginBase, performance: { now: () => clock.now }, Float32Array, DataView, ArrayBuffer,
                 MultiresSpectrum: globalThis.MultiresSpectrum, console });
     }
     const subscribers = new Map();
@@ -55,7 +59,7 @@ function runtime() {
         subscribeItem(id, callback) { subscribers.set(id, callback); return () => subscribers.delete(id); },
         getFrame: () => null, getModulators: () => ({ level: 0, bass: 0 })
     };
-    return { window, document, sources, subscribers, counts: () => [constructions, registrations] };
+    return { window, document, sources, subscribers, clock, counts: () => [constructions, registrations] };
 }
 
 function noteFrame(index = 1) {
@@ -132,7 +136,10 @@ test('Visualizer uses the original analyzer drawing methods without constructing
             ['oscilloscope', 'OscilloscopePlugin', 'drawWaveform'],
             ['stereo', 'StereoMeterPlugin', 'drawMeter'],
             ['notes', 'NoteSpectrogramPlugin', 'drawGraph'],
-            ['level-meter', 'LevelMeterPlugin', 'updateMeter']
+            ['level-meter', 'LevelMeterPlugin', 'updateMeter'],
+            ['phase', 'PhaseSelectEqPlugin', 'drawVisualizerPhaseMap'],
+            ['analog-meter', 'AnalogMeterPlugin', 'drawVisualizerMeter'],
+            ['rhythm-analyzer', 'RhythmAnalyzerPlugin', 'drawVisualizerRhythm']
         ]) {
             const baseline = env.counts();
             const item = createItem(type, type), target = canvas();
@@ -142,12 +149,243 @@ test('Visualizer uses the original analyzer drawing methods without constructing
             assert.equal(display.plugin.graphDpr, 2);
             assert.deepEqual(env.counts(), baseline);
             const original = new env.window[name]();
-            for (const key of Object.keys(item.params).filter(key => key in original)) {
+            // Time ballistics and the peak toggle are display-side; only Analog Meter's ph is a plugin field.
+            const displayKeys = type === 'analog-meter' ? [] : ['cf', 'ph', 'pf', 'sm', 'pk'];
+            for (const key of Object.keys(item.params).filter(key => key in original && !displayKeys.includes(key))) {
                 assert.equal(display.plugin[key], item.params[key], `${type}.${key}`);
             }
             display.dispose();
             assert.equal(env.subscribers.has(type), false);
         }
+    });
+});
+
+test('Analog Meter folds a single selected channel and names it after the input channel', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = { ...createItem('analog-meter', 'meter'), channel: 'R' };
+        item.params.md = 'Loudness';
+        const target = canvas();
+        const display = createAnalyzerDisplay(item, target, env.sources);
+        assert.equal(display.plugin.channelCount, 1);
+        const payload = new DataView(new ArrayBuffer(4 + 16 + 24));
+        payload.setUint8(0, 5);
+        payload.setUint8(1, 2);
+        payload.setUint16(2, 3, true);
+        [-20, -18, -21, -19, -23, -22, -24, 6, -1, 12].forEach((value, index) =>
+            payload.setFloat32(4 + index * 4, value, true));
+        env.subscribers.get('meter')({ frameType: 27, formatVersion: 1, payload }, {});
+        const reading = display.plugin.reading;
+        assert.equal(reading.channels.length, 1);
+        assert.equal(reading.channels[0].needleDb, -20);
+        assert.ok(Math.abs(reading.program.momentary - (-23 - 10 * Math.log10(2))) < 1e-4);
+        assert.equal(display.plugin.cellTitle(0), 'Ch 2 (reference)');
+        display.draw(item, 1, 400);
+        assert.ok(target.context.calls.some(([key]) => key === 'stroke'));
+        display.dispose();
+    });
+});
+
+test('Rhythm Analyzer draws the Groove view from a Visualizer telemetry frame', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('rhythm-analyzer', 'rhythm');
+        const target = canvas();
+        const display = createAnalyzerDisplay(item, target, env.sources);
+        const payload = new DataView(new ArrayBuffer(1344));
+        const source = {};
+        [[0, 48000, 'Float32'], [4, 1, 'Uint32'], [8, 480, 'Uint32'], [12, 100, 'Uint32'], [16, 1, 'Float32'],
+            [28, 2, 'Uint32'], [32, 1, 'Uint32'], [36, 1, 'Uint32'], [40, .8, 'Float32'], [44, .5, 'Float32'],
+            [48, 150, 'Uint32'], [56, 3, 'Uint32'], [60, 120, 'Float32']]
+            .forEach(([offset, value, kind]) => payload[`set${kind}`](offset, value, true));
+        for (let bin = 0; bin < 192; bin++) payload.setFloat32(64 + bin * 4, bin === 96 ? 1 : .1, true);
+        [[1, 2, .02, 0], [1, 3, .97, 1]].forEach(([epoch, beat, beatFraction, band], index) => {
+            const base = 832 + index * 32;
+            payload.setUint32(base, 90 + index * 50, true);
+            payload.setUint32(base + 8, epoch, true);
+            payload.setInt32(base + 12, beat, true);
+            payload.setFloat32(base + 16, beatFraction, true);
+            payload.setFloat32(base + 20, .5, true);
+            payload.setFloat32(base + 24, .7, true);
+            payload.setUint8(base + 28, band);
+        });
+        env.subscribers.get('rhythm')({ frameType: 28, formatVersion: 1, payload, source }, source);
+        assert.equal(display.plugin.activeGeneration, 1);
+        display.draw(item, 1, 400);
+        assert.ok(target.context.calls.some(([key]) => key === 'stroke' || key === 'fill' || key === 'fillRect'));
+        assert.ok(target.context.calls.some(call => call[0] === 'fillText' && call[1] === '120.0 BPM'), 'BPM overlays the graphs');
+        Object.assign(item.params, { vt: false, vm: false, ve: false, vl: false, showAxes: false, showAxisNumbers: false });
+        const draws = [];
+        target.context.measureText = text => ({ width: text.length * Number(/([\d.]+)px/.exec(target.context.font)?.[1] || 12) * .55 });
+        target.context.fillText = (text, x, y, maxWidth) => draws.push({ text, x, y, maxWidth,
+            font: target.context.font, align: target.context.textAlign, baseline: target.context.textBaseline,
+            spacing: target.context.letterSpacing, shadowBlur: target.context.shadowBlur });
+        const redraw = () => { draws.length = 0; target.context.calls.length = 0; display.draw(item, 1, 400, undefined, 2); };
+        const arcs = () => target.context.calls.filter(call => call[0] === 'arc');
+        redraw();
+        assert.equal(display.plugin._readoutFrame.header.length, 0);
+        assert.equal(display.plugin._readoutFrame.panels.length, 0);
+        assert.deepEqual(arcs().map(call => call.slice(1, 3)), [[400, 200]]);
+        assert.ok(arcs()[0][3] > 100, 'Beat circle is large enough to see without graphs');
+        assert.deepEqual(draws.map(({ text, x, y, align, baseline }) => ({ text, x, y, align, baseline })),
+            [{ text: '120.0 BPM', x: 400, y: 200, align: 'center', baseline: 'middle' }]);
+        assert.ok(parseFloat(draws[0].font) < 192, 'BPM scales down to fit inside the circle');
+        item.style.beatFitBpm = false;
+        redraw();
+        assert.equal(draws[0].font, '192px sans-serif', 'Automatic fitting can be disabled');
+        item.style.beatFitBpm = true;
+
+        payload.setUint32(48, 100, true);
+        payload.setUint32(12, 101, true);
+        env.subscribers.get('rhythm')({ frameType: 28, formatVersion: 1, payload, source }, source);
+        redraw();
+        assert.ok(target.context.calls.some(call => call[0] === 'globalAlpha' && call[1] > .25 && call[1] <= .3), 'Circle lights on the detected beat');
+        payload.setUint32(12, 110, true);
+        payload.setUint32(48, 150, true);
+        env.subscribers.get('rhythm')({ frameType: 28, formatVersion: 1, payload, source }, source);
+        redraw();
+        const pulse = () => target.context.calls.find(call => call[0] === 'globalAlpha' && call[1] !== 1)?.[1];
+        const expectedPulse = (age, hold, decay) => .3 * Math.exp(-Math.max(0, age - hold) / decay);
+        assert.ok(Math.abs(pulse() - expectedPulse(100, 0, 90)) < 1e-6, 'Circle fades exponentially between beats');
+        item.style.beatHoldTime = 50;
+        redraw();
+        assert.ok(Math.abs(pulse() - expectedPulse(100, 50, 90)) < 1e-6);
+        item.style.beatDecayTime = 200;
+        redraw();
+        assert.ok(Math.abs(pulse() - expectedPulse(100, 50, 200)) < 1e-6, 'A longer decay time fades more slowly');
+        item.style.beatHoldTime = 200;
+        redraw();
+        assert.equal(pulse(), .3, 'The hold time maintains full opacity');
+        Object.assign(item.style, { beatHoldTime: 0, beatDecayTime: 90 });
+        env.clock.now += 45;
+        redraw();
+        assert.ok(Math.abs(pulse() - expectedPulse(145, 0, 90)) < 1e-6, 'The pulse fades between telemetry frames');
+        payload.setUint32(12, 150, true);
+        env.subscribers.get('rhythm')({ frameType: 28, formatVersion: 1, payload, source }, source);
+        redraw();
+        assert.equal(pulse(), .3, 'The next detected beat restarts the pulse');
+        payload.setUint32(32, 0, true);
+        payload.setUint32(12, 151, true);
+        env.subscribers.get('rhythm')({ frameType: 28, formatVersion: 1, payload, source }, source);
+        redraw();
+        assert.equal(target.context.calls.some(call => call[0] === 'fill'), false, 'Searching leaves a hollow circle');
+        assert.equal(draws[0].text, '(120.0) BPM', 'Held tempo is distinguished from a locked tempo');
+
+        Object.assign(item.style, { fontSize: 120, fontFamily: 'serif', bold: true, italic: true, align: 'right',
+            verticalAlign: 'bottom', letterSpacing: 4, textCase: 'lower', outlineWidth: 2, shadowBlur: 3 });
+        item.params.showBeat = false;
+        redraw();
+        assert.equal(arcs().length, 0);
+        assert.deepEqual(draws[0], { text: '(120.0) bpm', x: 804, y: 396, maxWidth: 792,
+            font: 'italic bold 240px serif', align: 'right', baseline: 'bottom', spacing: '8px', shadowBlur: 6 });
+        item.params.showBeat = true;
+        item.params.showBpm = false;
+        redraw();
+        assert.equal(draws.length, 0);
+        assert.equal(arcs().length, 1, 'Beat works without BPM');
+        Object.assign(item.style, { beatSize: 50, beatLineWidth: 6, beatStrokeOpacity: .4, beatUsePalette: false,
+            beatFillColor: '#112233', beatStrokeColor: '#abcdef', beatFillOpacity: .6 });
+        redraw();
+        assert.equal(arcs()[0][3], 94, 'Circle diameter and border width follow the saved style');
+        assert.equal(target.context.lineWidth, 12, 'Circle border scales with the scene like text');
+        assert.ok(target.context.calls.some(call => call[0] === 'strokeStyle' && call[1] === '#abcdef'));
+        assert.ok(target.context.calls.some(call => call[0] === 'globalAlpha' && call[1] === .4));
+        item.style.beatLineWidth = 0;
+        redraw();
+        assert.equal(target.context.calls.some(call => call[0] === 'stroke'), false, 'A zero-width border is hidden');
+        item.params.showBeat = false;
+        redraw();
+        assert.equal(arcs().length, 0, 'Both indicators can be hidden');
+        display.dispose();
+    });
+});
+
+function phaseFrame(points, sequence = 0, maximumDb = 0) {
+    const payload = new DataView(new ArrayBuffer(16 + points.length * 16));
+    payload.setFloat32(0, 48000, true);
+    payload.setUint16(4, points.length, true);
+    payload.setUint32(8, 4096, true);
+    payload.setFloat32(12, maximumDb, true);
+    points.forEach(([frequency, phase, balance, level], index) => {
+        [frequency, phase, balance, level].forEach((value, field) =>
+            payload.setFloat32(16 + index * 16 + field * 4, value, true));
+    });
+    return { frameType: 20, formatVersion: 2, sequence, flags: 0, payload };
+}
+
+test('Phase Map draws the Phase Select EQ point cloud without the effect regions or background', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('phase', 'phase'), target = canvas();
+        const display = createAnalyzerDisplay(item, target, env.sources);
+        env.subscribers.get('phase')(phaseFrame([[1000, 90, -50, -10], [2000, 0, 0, -80]]), {});
+        const arcs = () => target.context.calls.filter(call => call[0] === 'arc');
+        display.draw(item, 1, 400);
+        assert.deepEqual(arcs().map(call => call[1]), [300], 'Phase maps -180..180 degrees across the width');
+        const smallRadius = arcs()[0][3], initialRange = item.params.dr;
+        assert.ok(smallRadius > 0.6 + 1.1, 'Visualizer points exceed the plugin graph\'s largest point');
+        assert.ok(target.context.calls.some(call => call[0] === 'clearRect'));
+        for (const method of ['fillRect', 'strokeRect', 'stroke', 'fillText'])
+            assert.equal(target.context.calls.some(call => call[0] === method), false, method);
+        assert.ok(target.context.calls.some(call => call[0] === 'fillStyle' && call[1] === item.palette.color));
+
+        target.context.calls.length = 0;
+        Object.assign(item.params, { ax: 'balance', dr: -96, showAxes: true, showAxisNumbers: true });
+        display.draw(item, 1, 400);
+        assert.deepEqual(arcs().map(call => call[1]), [100, 200], 'Balance axis and wider level range');
+        const [strongAlpha, weakAlpha] = target.context.calls
+            .filter(call => call[0] === 'globalAlpha' && call[1] !== 1).map(call => call[1]);
+        assert.ok(weakAlpha >= 0.35 && weakAlpha < strongAlpha, 'Weak points stay visible below strong ones');
+        assert.ok(target.context.calls.some(call => call[0] === 'stroke'));
+        assert.ok(target.context.calls.some(call => call[0] === 'fillText' && call[1] === '1k'));
+        const labelStyle = target.context.calls.findLast((call, index) => call[0] === 'fillStyle'
+            && index < target.context.calls.findIndex(entry => entry[0] === 'fillText'));
+        assert.equal(labelStyle[1], 'rgb(102,102,102)', 'Axis labels use the Visualizer graph-label default');
+        assert.equal(target.context.calls.some(call => call[0] === 'strokeRect'), false, 'No regions or handles');
+
+        target.context.calls.length = 0;
+        item.palette.mode = 'heatmap';
+        display.draw(item, 1, 400);
+        assert.ok(target.context.calls.some(call => call[0] === 'fillStyle' && /^rgb\(/.test(call[1])));
+
+        target.context.calls.length = 0;
+        Object.assign(item.params, { ax: 'phase', dr: initialRange });
+        Object.assign(target, { width: 2000, height: 1200 });
+        display.draw(item, 1, 1000);
+        assert.ok(Math.abs(arcs()[0][3] / smallRadius - 2.4 / 1.5) < 1e-9, 'Point size follows the item size');
+        display.dispose();
+    });
+});
+
+test('Phase Map measures quiet frames against the Reference Floor', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('phase', 'phase'), target = canvas();
+        const display = createAnalyzerDisplay(item, target, env.sources);
+        const arcs = () => target.context.calls.filter(call => call[0] === 'arc');
+        const points = [[1000, 90, -50, 0], [2000, 0, 0, -50]];
+        // A raw kernel maximum of -97 dB is about -90 dBFS, 50 dB under the -40 dB default.
+        const send = sequence => env.subscribers.get('phase')(phaseFrame(points, sequence, -97), {});
+        env.subscribers.get('phase')(phaseFrame(points, 0), {});
+        display.draw(item, 1, 400);
+        const loudRadius = arcs()[0][3];
+        assert.equal(arcs().length, 2);
+
+        target.context.calls.length = 0;
+        send(5);
+        display.draw(item, 1, 400);
+        assert.equal(arcs().length, 1, 'Points under Reference Floor + DB Range disappear');
+        assert.ok(arcs()[0][3] < loudRadius, 'The strongest quiet point shrinks');
+
+        target.context.calls.length = 0;
+        item.params.ml = -120;
+        display.draw(item, 1, 400);
+        send(10);
+        target.context.calls.length = 0;
+        display.draw(item, 1, 400);
+        assert.equal(arcs().length, 2, 'A lower floor keeps the strongest component as the reference');
+        assert.equal(arcs()[0][3], loudRadius);
+        display.dispose();
     });
 });
 
@@ -281,6 +519,7 @@ test('Stereo correlation and balance controls hide each meter without hiding the
                 correlationBar: calls.some(call => call[0] === 'fillRect' && call[1] === 0),
                 balanceBar: calls.some(call => call[0] === 'fillRect' && call[2] === 384),
                 labels: calls.filter(call => call[0] === 'fillText').map(call => call[1]),
+                outlined: calls.filter(call => call[0] === 'strokeText').map(call => call[1]),
                 waveform: calls.some(call => call[0] === 'rect'),
                 peak: calls.some(call => call[0] === 'closePath')
             };
@@ -289,6 +528,7 @@ test('Stereo correlation and balance controls hide each meter without hiding the
         assert.equal(both.correlationBar, true);
         assert.equal(both.balanceBar, true);
         assert.ok(both.labels.includes('LR Correlation') && both.labels.includes('LR Balance'));
+        assert.ok(both.outlined.includes('LR Correlation') && both.outlined.includes('LR Balance'), 'Titles over the bars are outlined');
         item.params.showCorrelation = false;
         const balanceOnly = draw();
         assert.equal(balanceOnly.correlationBar, false);
@@ -312,14 +552,14 @@ test('Stereo correlation and balance controls hide each meter without hiding the
     });
 });
 
-test('Notes retain received history across canvas size, pixel ratio and palette changes without copying the keyboard into it', async () => {
+test('Notes retain received history across canvas size and palette changes without copying the keyboard into it', async () => {
     const env = runtime();
     await withGlobals(env, () => {
         const stage = canvas(), renderer = new VisualizerRenderer(stage), item = createItem('notes', 'notes');
         item.params.vl = false;
         item.params.kb = item.params.showAxisNumbers = true;
         const layout = createDefaultLayout(); layout.items = [item];
-        renderer.draw(layout, env.sources, {}, 1, { pixelRatio: 2 });
+        renderer.draw(layout, env.sources, {}, 1);
         env.subscribers.get('notes')(noteFrame(), {});
         const state = renderer.layers.get('notes'), plugin = state.display.plugin;
         assert.equal(plugin.lastFrameIndex, 1);
@@ -327,12 +567,13 @@ test('Notes retain received history across canvas size, pixel ratio and palette 
         assert.ok(recorded.some(value => value > 0));
         stage.width = 1000; stage.height = 600;
         item.palette.stops[0].color = '#ff0000';
-        renderer.draw(layout, env.sources, {}, 1, { pixelRatio: 1 });
+        renderer.draw(layout, env.sources, {}, 1);
         assert.equal(renderer.layers.get('notes'), state);
         assert.equal(plugin.history, history);
         assert.deepEqual(history, recorded);
         assert.equal(plugin.writeColumn, column);
-        assert.equal(plugin.graphDpr, 1);
+        // Graphics scale with the stage on a 1280-wide basis at the default Graph Scale.
+        assert.ok(Math.abs(plugin.graphDpr - 1000 / 1280) < 1e-12);
         assert.notEqual(plugin.tempCanvas, state.canvas);
         assert.notEqual(plugin.scaledHistoryCanvas, state.canvas);
         assert.ok(state.canvas.context.calls.some(call => call[0] === 'fillText'));
@@ -379,8 +620,10 @@ test('Notes use the keyboard space for history and hide its meters until the key
             assert.ok(shown.some(call => call[0] === 'arc'), 'Showing the keyboard restores its meters');
             assert.ok(shown.some(call => call[0] === 'fillText' && /^C\d+$/.test(call[1])),
                 'Keyboard note names remain visible when axis numbers are off');
-            const keyboardDepth = 44.8 * (ly === 'Horizontal'
-                ? target.width / 1024 : target.height / 480);
+            const [pitchLength, crossLength] = ly === 'Horizontal'
+                ? [target.width, target.height] : [target.height, target.width];
+            const keyboardDepth = env.window.FrequencyAxis.keyboardDepths(
+                12 * pitchLength / (plugin.mx - plugin.mn + 1), crossLength).gutter;
             assert.ok(Math.abs(extent(shown) - (fullExtent - keyboardDepth)) < 1e-8,
                 `${ly}: ${extent(shown)} vs ${fullExtent - keyboardDepth}`);
             assert.equal(target.context.fillStyle, '#111');
@@ -443,6 +686,56 @@ test('Axis lines and labels can be hidden independently while the spectrum trace
         assert.equal(count().labels.length, 0);
         item.params.showAxisNumbers = true;
         assert.ok(count().labels.length > 0, 'Graph axis labels remain independently available');
+    });
+});
+
+test('Spectrum Max Frequency moves the right edge of the frequency axis on both scales', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('spectrum', 'spectrum'), target = canvas();
+        const display = createAnalyzerDisplay(item, target, env.sources);
+        display.draw(item, 1, 800);
+        assert.equal(Math.round(display.plugin.displayXToFrequency(1)), 40000);
+        for (const sc of ['log-hq', 'linear']) {
+            Object.assign(item.params, { mf: 20000, sc });
+            display.draw(item, 1, 800);
+            assert.equal(Math.round(display.plugin.displayXToFrequency(1)), 20000, sc);
+            assert.equal(Math.round(display.plugin.displayXToFrequency(0)), 20, sc);
+        }
+    });
+});
+
+test('Spectrogram Max Frequency moves the top of the frequency axis over the full-range history', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('spectrogram', 'spectrogram'), target = canvas();
+        const display = createAnalyzerDisplay(item, target, env.sources);
+        display.draw(item, 1, 800);
+        assert.equal(Math.round(display.plugin.displayRowToFrequency(0)), 40000);
+        assert.equal(display.plugin.displayRowToCanonicalRow(0), 0);
+        for (const sc of ['log-hq', 'linear']) {
+            Object.assign(item.params, { mf: 20000, sc });
+            display.draw(item, 1, 800);
+            assert.equal(Math.round(display.plugin.displayRowToFrequency(0)), 20000, sc);
+            assert.equal(Math.round(display.plugin.displayRowToFrequency(255)), 20, sc);
+            // History rows stay log-spaced over 20 Hz-40 kHz; 20 kHz lies one octave below the top.
+            assert.ok(Math.abs(display.plugin.displayRowToCanonicalRow(0) - 255 * Math.log10(2) / Math.log10(2000)) < 1e-9, sc);
+            assert.ok(Math.abs(display.plugin.displayRowToCanonicalRow(255) - 255) < 1e-9, sc);
+        }
+    });
+});
+
+test('Linear frequency axes up to 10 kHz label every 1 kHz', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        for (const type of ['spectrum', 'spectrogram']) {
+            const item = createItem(type, type), target = canvas();
+            Object.assign(item.params, { sc: 'linear', mf: 10000, showAxes: true, showAxisNumbers: true });
+            const display = createAnalyzerDisplay(item, target, env.sources);
+            display.draw(item, 1, 800);
+            const labels = target.context.calls.filter(call => call[0] === 'fillText').map(call => String(call[1]));
+            for (let khz = 1; khz <= 9; khz++) assert.ok(labels.includes(`${khz}k`), `${type} ${khz}k`);
+        }
     });
 });
 
@@ -523,6 +816,135 @@ test('Layout theme colors and reset remain independent of the app theme and pres
             theme.get = originalGet;
             display.dispose();
         }
+    });
+});
+
+test('Spectrum gradients follow frequency or level in either orientation and display mode', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('spectrum', 'spectrum');
+        item.palette.mode = 'gradient';
+        item.palette.stops = [{ pos: 0, color: '#0000ff' }, { pos: 1, color: '#ff0000' }];
+        const target = canvas(), display = createAnalyzerDisplay(item, target, env.sources);
+        target.context.createLinearGradient = (...coordinates) => ({ coordinates, stops: [],
+            addColorStop(position, color) { this.stops.push([position, color]); } });
+        for (const orientation of ['horizontal', 'vertical']) for (const dm of ['line', 'bar']) {
+            item.params.orientation = orientation; item.params.dm = dm;
+            for (const direction of ['frequency', 'intensity']) {
+                item.palette.direction = direction;
+                display.draw(item, 0, 800);
+                const options = display.plugin.displayOptions;
+                const gradient = options.traceStyle(target.context, 320, 160);
+                assert.deepEqual(gradient.coordinates, direction === 'frequency' ? [0, 0, 320, 0] : [0, 160, 0, 0]);
+                assert.equal(gradient.stops[0][1], 'rgb(0,0,255)');
+                assert.equal(gradient.stops.at(-1)[1], 'rgb(255,0,0)');
+                assert.equal(options.barColor, null);
+                if (direction === 'intensity') {
+                    assert.equal(options.traceStyle(target.context, 320, 160), gradient);
+                    assert.notEqual(options.traceStyle(target.context, 320, 80), gradient);
+                }
+            }
+        }
+        item.palette.direction = 'intensity'; item.palette.motion.mode = 'hue'; item.palette.motion.speed = .25;
+        display.draw(item, 1, 800);
+        assert.notEqual(display.plugin.displayOptions.traceStyle(target.context, 320, 160).stops[0][1], 'rgb(0,0,255)');
+        display.dispose();
+    });
+});
+
+test('Spectrogram switches gradient lookup between frequency and intensity and repaints existing history', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('spectrogram', 'spectrogram');
+        item.palette.mode = 'gradient';
+        item.palette.stops = [{ pos: 0, color: '#0000ff' }, { pos: 1, color: '#ff0000' }];
+        const display = createAnalyzerDisplay(item, canvas(), env.sources), plugin = display.plugin;
+        plugin.dspSpectrogramActive = true;
+        plugin.spectrogramIntensityBuffer.fill(128);
+        const pixel = row => Array.from(plugin.imageDataCache.data.slice(row * 1024 * 4, row * 1024 * 4 + 4));
+        for (const direction of ['intensity', 'frequency', 'intensity']) {
+            item.palette.direction = direction; display.draw(item, 0, 800);
+            const options = plugin.displayOptions;
+            if (direction === 'intensity') {
+                assert.equal(options.frequencyColorLut, null);
+                assert.equal(options.colorLut.length, 256 * 3);
+                assert.deepEqual(pixel(0), [128, 0, 127, 128]);
+                assert.deepEqual(pixel(255), pixel(0));
+                plugin.paintDspSpectrogramColumn(0, new Uint8Array(256).fill(255));
+                assert.deepEqual(pixel(0), [255, 0, 0, 255]);
+                assert.deepEqual(pixel(255), pixel(0));
+            } else {
+                assert.equal(options.colorLut, null);
+                assert.deepEqual(pixel(0), [255, 0, 0, 128]);
+                assert.deepEqual(pixel(255), [0, 0, 255, 128]);
+            }
+        }
+        display.dispose();
+    });
+});
+
+test('Notes intensity gradients color pitch confidence and note volume while preserving history', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('notes', 'notes');
+        item.palette.mode = 'gradient'; item.palette.direction = 'intensity'; item.palette.mapping = 'octave';
+        item.palette.stops = [{ pos: 0, color: '#0000ff' }, { pos: 1, color: '#ff0000' }];
+        const display = createAnalyzerDisplay(item, canvas(), env.sources), plugin = display.plugin;
+        plugin.history[197] = .5; plugin.levelHistory[197] = 1;
+        plugin.paintHistoryImage();
+        const history = plugin.history;
+        const row = 88 - 1 - (60 - 21), offset = row * 1024 * 4;
+        assert.deepEqual(Array.from(plugin.imageData.data.slice(offset, offset + 4)), [128, 0, 127, 128]);
+        const gradients = [];
+        const context = { createLinearGradient: () => {
+            const gradient = { stops: [], addColorStop(position, color) { this.stops.push([position, color]); } };
+            gradients.push(gradient); return gradient;
+        }, fillRect() {} };
+        const bar = plugin._volumeBarShape(0, { midi: 60, best: 197, confidence: .5 }, 8, plugin._displayPalette());
+        assert.equal(bar.fill, 'rgba(255, 0, 0, 0.5)');
+        plugin.mn = plugin.mx = 60; plugin._normalizedLevel = () => 1;
+        plugin._drawVolumeMeters({ createRadialGradient: context.createLinearGradient,
+            beginPath() {}, moveTo() {}, arc() {}, closePath() {}, fill() {} }, 100, 8, plugin._displayPalette());
+        assert.ok(gradients[0].stops.some(([, color]) => color === 'rgba(255, 0, 0, 0.5)'));
+        item.palette.direction = 'frequency'; display.draw(item, 0, 800);
+        assert.equal(plugin.history, history);
+        assert.deepEqual(plugin.displayOptions.noteColor(60), plugin.displayOptions.noteColor(72));
+        item.palette.direction = 'intensity'; display.draw(item, 0, 800);
+        assert.deepEqual(plugin.displayOptions.noteColor(60, .5), plugin.displayOptions.noteColor(72, .5));
+        assert.notDeepEqual(plugin.displayOptions.noteColor(60, .5), plugin.displayOptions.noteColor(60, 1));
+        display.dispose();
+    });
+});
+
+test('Chroma intensity gradients color dots and fill segments by level and restore frequency colors', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('chroma', 'chroma');
+        item.palette.mode = 'gradient'; item.palette.direction = 'intensity';
+        item.palette.stops = [{ pos: 0, color: '#0000ff' }, { pos: 1, color: '#ff0000' }];
+        const target = canvas(), display = createAnalyzerDisplay(item, target, env.sources), plugin = display.plugin;
+        plugin.display = [{ midi: 60, level: -24 }, { midi: 61, level: -12 }, { midi: 62, level: -12 }];
+        plugin.levelReference = -12;
+        for (const dm of [0, 1]) {
+            item.params.dm = dm; target.context.calls.length = 0;
+            display.draw(item, 0, 800);
+            const options = plugin.displayOptions;
+            assert.equal(options.spiralFillStyle, null);
+            assert.deepEqual(options.signalColor(60, .5), options.signalColor(72, .5));
+            const styles = target.context.calls.filter(call => call[0] === 'fillStyle').map(call => call[1]);
+            assert.ok(styles.includes('rgba(255,0,0,1)'), `${dm}: loud signal uses the end color`);
+            assert.ok(styles.some(style => typeof style === 'string' && style.startsWith('rgba(') && style !== 'rgba(255,0,0,1)'));
+        }
+        item.palette.direction = 'frequency'; display.draw(item, 0, 800);
+        assert.equal(plugin.displayOptions.signalColor, null);
+        assert.equal(plugin.displayOptions.spiralFillStyle, null);
+        assert.equal(typeof plugin.displayOptions.spiralFillColor, 'function');
+        assert.notEqual(plugin.displayOptions.spiralFillColor(60), plugin.displayOptions.spiralFillColor(72));
+        assert.equal(plugin.displayOptions.spiralFillColor(60), `rgb(${plugin.displayOptions.noteColor(60).map(Math.round).join(',')})`);
+        item.palette.mapping = 'octave'; display.draw(item, 0, 800);
+        assert.equal(plugin.displayOptions.spiralFillColor, null);
+        assert.equal(typeof plugin.displayOptions.spiralFillStyle, 'function');
+        display.dispose();
     });
 });
 
@@ -758,15 +1180,15 @@ test('Notes Heatmap uses confidence for history and volume bars without a second
             const gradient = { stops: [], addColorStop(position, color) { this.stops.push([position, color]); } };
             gradients.push(gradient); return gradient;
         }, fillRect() {} };
-        plugin._paintVolumeBar(context, 0, 0, { midi: 60, best: 197, confidence }, 8, plugin._displayPalette());
-        assert.ok(gradients[0].stops.some(([, color]) => color.endsWith(`, ${rgba[index + 3] / 255})`)));
+        const bar = plugin._volumeBarShape(0, { midi: 60, best: 197, confidence }, 8, plugin._displayPalette());
+        assert.ok(bar.fill.endsWith(`, ${rgba[index + 3] / 255})`));
         plugin.mn = plugin.mx = 60;
         plugin.vl = true;
         plugin._normalizedLevel = () => confidence;
         const glow = { createRadialGradient: context.createLinearGradient,
             beginPath() {}, moveTo() {}, arc() {}, closePath() {}, fill() {} };
         plugin._drawVolumeMeters(glow, 100, 8, plugin._displayPalette());
-        assert.ok(gradients[1].stops.some(([, color]) => color.endsWith(`, ${rgba[index + 3] / 255 * .5})`)));
+        assert.ok(gradients[0].stops.some(([, color]) => color.endsWith(`, ${rgba[index + 3] / 255 * .5})`)));
         assert.equal(display.phase, 0);
         display.dispose();
     });
@@ -801,7 +1223,7 @@ test('Visualizer keyboards keep their key depth in proportion as graph items res
                 assert.ok(depth > 0, `${type} ${ly ?? ''}: keyboard visible at ${scale}x`);
                 const blackDepth = type === 'spectrum' ? 4 : 3;
                 assert.ok(calls.some(call => call[0] === 'fillRect' &&
-                    Math.abs(call[blackDepth] - depth / 1.6) < 1e-8),
+                    Math.abs(call[blackDepth] - depth * 95 / 150) < 1e-8),
                 `${type} ${ly ?? ''}: black keys retain their depth relative to white keys`);
                 const pitchLength = type === 'spectrum' ? target.width
                     : type === 'spectrogram' || ly === 'Vertical' ? target.height : target.width;
@@ -823,5 +1245,222 @@ test('Visualizer keyboards keep their key depth in proportion as graph items res
                     `${type} ${ly ?? ''}: keyboard key aspect remains stable`);
             }
         }
+    });
+});
+
+test('Display ballistics pass through at zero fall time, fall 20 dB per fall time, and hold peaks', () => {
+    const instant = createBallistics(2, false);
+    stepBallistics(instant, Float32Array.of(-10, -30), 0, 0);
+    stepBallistics(instant, Float32Array.of(-50, -70), 0, 0);
+    assert.deepEqual(Array.from(instant.cur), [-50, -70]);
+
+    const state = createBallistics(1, true);
+    stepBallistics(state, [-10], 0, 2, 1, 0.5);
+    assert.deepEqual([state.cur[0], state.peak[0]], [-10, -10]);
+    stepBallistics(state, [-100], 0, 2, 1, 0.5);
+    assert.deepEqual([state.cur[0], state.peak[0]], [-10, -10]);
+    stepBallistics(state, [-100], 2, 2, 1, 0.5);
+    // The current value falls 20 dB in 2 s; the peak holds 1 s, then falls 40 dB/s for 1 s.
+    assert.equal(state.cur[0], -30);
+    assert.equal(state.peak[0], -30);
+    stepBallistics(state, [-100], 0.5, 2, 1, 0.5);
+    // The -30 dB value reached at the last step is itself held.
+    assert.equal(state.cur[0], -35);
+    assert.equal(state.peak[0], -30);
+    stepBallistics(state, [-20], 0, 2, 1, 0.5);
+    stepBallistics(state, [-100], 0.5, 2, 1, 0.5);
+    assert.deepEqual([state.cur[0], state.peak[0]], [-25, -20]);
+    assert.ok([...state.cur, ...state.peak].every(Number.isFinite));
+
+    // A brief return to the held level must not make a neighbor 0.01 dB lower fall away.
+    const pair = createBallistics(2, true);
+    let widest = 0;
+    for (let frame = 0; frame < 180; frame++) {
+        const level = frame === 0 || frame === 54 ? -10 : -30;
+        stepBallistics(pair, [level, frame === 54 ? level - 0.01 : level], 1 / 60, 0, 1.5, 2);
+        const gap = Math.abs(pair.peak[0] - pair.peak[1]);
+        if (gap > widest) widest = gap;
+    }
+    assert.ok(widest <= 0.01 + 1e-9, `neighbor peaks diverged by ${widest} dB`);
+});
+
+test('Spectrum smoothing is an identity at zero and spreads a spike symmetrically in log frequency', () => {
+    const smooth = createSpectrumSmoother();
+    const levels = new Float32Array(1001).fill(-240);
+    levels.fill(-145, 100, 900);
+    levels[500] = 0;
+    assert.equal(smooth(levels, 0, { start: 100, end: 900 }), levels);
+
+    const output = smooth(levels, 0.5, { start: 100, end: 900 });
+    for (let i = 0; i < 100; i++) assert.equal(output[i], -240);
+    for (let i = 900; i < 1001; i++) assert.equal(output[i], -240);
+    assert.ok(output[500] < -10 && output[520] > -100);
+    for (let d = 1; d < 58; d++) assert.ok(Math.abs(output[500 - d] - output[500 + d]) < 1e-6);
+    let power = 0;
+    for (let i = 100; i < 900; i++) {
+        assert.ok(output[i] >= -145);
+        power += 10 ** (output[i] / 10);
+    }
+    assert.ok(Math.abs(power - 1) < 1e-6);
+    assert.equal(smooth(levels, 0.5, { start: 100, end: 900 }), output);
+
+    const bins = new Float32Array(4096).fill(-145);
+    bins[0] = 3;
+    bins[1000] = 0;
+    const linear = smooth(bins, 1);
+    assert.equal(linear[0], 3);
+    for (const octave of [0.1, 0.3, 0.5]) {
+        assert.ok(Math.abs(linear[Math.round(1000 * 2 ** octave)] - linear[Math.round(1000 / 2 ** octave)]) < 0.5);
+    }
+    assert.ok(linear[1000] < -10 && linear[1500] < linear[1200]);
+});
+
+test('Spectrum smoothing keeps quiet high bins accurate next to a loud low end', () => {
+    const quiet = new Float32Array(8192);
+    for (let i = 0; i < quiet.length; i++) quiet[i] = -130 + 3 * Math.sin(i * 0.37);
+    const loud = quiet.slice();
+    loud.fill(0, 0, 40);
+    const reference = createSpectrumSmoother()(quiet, 0.3);
+    const output = createSpectrumSmoother()(loud, 0.3);
+    for (let i = 100; i < quiet.length; i++) assert.ok(Math.abs(output[i] - reference[i]) < 1e-3, `bin ${i}`);
+});
+
+test('Spectrum applies fall time, peak hold and peak fall to telemetry, and hides peaks when Peak is off', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('spectrum', 'spectrum'), target = canvas();
+        Object.assign(item.params, { sc: 'log', cf: 1, ph: 0.5, pf: 2 });
+        const display = createAnalyzerDisplay(item, target, env.sources);
+        env.window.SpectrumAnalyzerPlugin.prototype.parseDspSpectrumTelemetryFrame = frame => frame.snapshot;
+        const send = level => env.subscribers.get('spectrum')({ snapshot: { sampleRate: 48000, points: 8, flags: 0,
+            current: new Float32Array(128).fill(level), peaks: new Float32Array(128).fill(level) } }, {});
+        send(-60);
+        display.draw(item, 1, 800);
+        assert.equal(display.plugin.spectrum[10], -60);
+        send(-100);
+        display.draw(item, 1.25, 800);
+        assert.equal(display.plugin.spectrum[10], -65);
+        assert.equal(display.plugin.peaks[10], -60);
+        display.draw(item, 1.75, 800);
+        assert.equal(display.plugin.spectrum[10], -75);
+        // A value entered at the start of a hold slot is held for 1.25 x ph, then falls.
+        assert.equal(display.plugin.peaks[10], -61.25);
+        assert.equal(display.plugin.peakDecayPaused, true);
+
+        const hiddenPeakPoints = () => {
+            target.context.calls.length = 0;
+            display.draw(item, 1.75, 800);
+            return target.context.calls.filter(call =>
+                (call[0] === 'lineTo' || call[0] === 'fillRect') && !Number.isFinite(call[2])).length;
+        };
+        assert.equal(hiddenPeakPoints(), 0);
+        item.params.pk = false;
+        assert.ok(hiddenPeakPoints() > 0);
+        item.params.dm = 'bar';
+        assert.ok(hiddenPeakPoints() > 0);
+        item.params.pk = true;
+        assert.equal(hiddenPeakPoints(), 0);
+        display.dispose();
+    });
+});
+
+test('Level Meter reapplies time parameters after a channel change and hides its peak marker when Peak is off', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('level-meter', 'meter'), target = canvas();
+        Object.assign(item.params, { cf: 0, ph: 2.5, pf: 4, showLevelValues: true });
+        const display = createAnalyzerDisplay(item, target, env.sources);
+        const plugin = display.plugin;
+        const check = () => {
+            assert.equal(plugin.FALL_RATE, Number.MAX_VALUE);
+            assert.equal(plugin.PEAK_HOLD_TIME, 2.5);
+            assert.equal(plugin.PEAK_FALL_RATE, 5);
+        };
+        check();
+        display.draw({ ...item, channel: 'L' }, 1, 800);
+        check();
+        display.draw(item, 1, 800);
+        const draw = () => {
+            Object.assign(plugin, { lv: [-10, -10], raw: [-10, -10], pl: [-3, -3], ph: [1, 1] });
+            target.context.calls.length = 0;
+            display.draw(item, 1, 800);
+            const calls = target.context.calls;
+            return { markers: calls.filter(call => call[0] === 'fillRect' && call[3] === 2 * plugin.graphDpr).length,
+                texts: calls.filter(call => call[0] === 'fillText').map(call => call[1]) };
+        };
+        const shown = draw();
+        assert.equal(shown.markers, 2);
+        assert.ok(shown.texts.includes('L -3.0 dB'));
+        item.params.pk = false;
+        const hidden = draw();
+        assert.equal(hidden.markers, 0);
+        assert.ok(hidden.texts.includes('L -10.0 dB'));
+        display.dispose();
+    });
+});
+
+test('Chroma releases cell levels at its fall time', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('chroma', 'chroma'), target = canvas();
+        const display = createAnalyzerDisplay(item, target, env.sources);
+        const plugin = display.plugin;
+        plugin.levelReference = -20;
+        plugin.display = [{ midi: 60, level: -20.3 }, { midi: 61, level: -40 }];
+        display.draw(item, 1, 800);
+        assert.deepEqual(plugin.display.map(cell => cell.level), [-20.3, -40]);
+        item.params.cf = 2;
+        plugin.display = [{ midi: 60, level: -80 }, { midi: 61, level: -30 }];
+        display.draw(item, 1.5, 800);
+        assert.deepEqual(plugin.display.map(cell => cell.level), [-25.3, -30]);
+        display.dispose();
+    });
+});
+
+test('Stereo hides only its peak contour when Peak is off', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('stereo', 'stereo'), target = canvas();
+        const display = createAnalyzerDisplay(item, target, env.sources);
+        const measurements = display.plugin.currentMeasurements = {
+            xBuffer: new Float32Array(100).fill(.5), yBuffer: new Float32Array(100).fill(.3),
+            currentPosition: 0, peakBuffer: new Float32Array(360).fill(.5)
+        };
+        display.plugin.sampleRate = 100;
+        const draw = () => {
+            target.context.calls.length = 0;
+            display.draw(item, 1, 800);
+            const calls = target.context.calls;
+            return { hidden: calls.filter(call => call[0] === 'lineTo' && Number.isNaN(call[1])).length,
+                samples: calls.filter(call => call[0] === 'rect').length };
+        };
+        const shown = draw();
+        assert.equal(shown.hidden, 0);
+        item.params.pk = false;
+        const hidden = draw();
+        assert.equal(hidden.hidden, 359);
+        assert.equal(hidden.samples, shown.samples);
+        assert.equal(display.plugin.currentMeasurements, measurements);
+        display.dispose();
+    });
+});
+
+test('Stereo peak contour holds and then falls at the Peak Fall Time rate', async () => {
+    const env = runtime();
+    await withGlobals(env, () => {
+        const item = createItem('stereo', 'stereo');
+        const display = createAnalyzerDisplay(item, canvas(), env.sources);
+        const db = values => 20 * Math.log10(values[0]);
+        const params = { ph: .5, pf: 2 };
+        display.stepStereo(new Float32Array(360).fill(1), params, 0);
+        const quiet = new Float32Array(360).fill(.1);
+        assert.ok(Math.abs(db(display.stepStereo(quiet, params, .5))) < 1e-5, 'held');
+        // Held for 1.25 x ph (a value entered at the start of a hold slot), then 10 dB/s.
+        assert.ok(Math.abs(db(display.stepStereo(quiet, params, 1)) + 8.75) < 1e-4, 'falls 10 dB per second');
+        // The defaults follow the DSP envelope, which already falls 20 dB/s.
+        const defaults = { ph: item.params.ph, pf: item.params.pf };
+        display.stepStereo(new Float32Array(360).fill(1), defaults, 0);
+        assert.ok(Math.abs(db(display.stepStereo(new Float32Array(360).fill(10 ** -.5), defaults, .5)) + 10) < 1e-4);
+        display.dispose();
     });
 });

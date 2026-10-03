@@ -33,6 +33,7 @@ Nos gráficos de pontos arrastáveis do 5Band PEQ, 15Band PEQ, 5Band FIR PEQ, Gr
 - [Narrow Range](#narrow-range) - Foca em partes específicas do som
 - [Room EQ](#room-eq) - Correção FIR baseada em medições de sala salvas
 - [Tilt EQ](#tilt-eq) - Equalizador de inclinação para ajuste tonal simples
+- [Tonal Balance EQ](#tonal-balance-eq) - Corrige automaticamente o equilíbrio tonal de longo prazo rumo a um alvo por estilo musical
 - [Tone Control](#tone-control) - Ajuste simples de graves, médios e agudos
 
 ## 15Band GEQ
@@ -84,6 +85,7 @@ Uma ferramenta de ajuste de som detalhada com 15 controles separados, cada um af
 - Sliders fáceis de usar com controle preciso
 - Reinicialização para as configurações padrão com um clique
 - Dê um duplo clique em um deslizador para devolver aquela banda a 0dB
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## 15Band PEQ
 
@@ -140,6 +142,7 @@ Um equalizador paramétrico de 15 bandas para ajustar graves, vocais, presença 
 - Atualização da curva em tempo real conforme os ajustes mudam
 - Grade de frequência e ganho
 - Leituras numéricas precisas para todos os parâmetros
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## 5Band Dynamic EQ
 
@@ -189,6 +192,7 @@ Um equalizador inteligente que ajusta automaticamente as bandas de frequência c
 - Gráfico de resposta de frequência em tempo real
 - Curva de resposta dinâmica mostrando os boosts e cortes atuais
 - Controles interativos de frequência e ganho
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## 5Band FIR PEQ
 
@@ -224,6 +228,7 @@ O 5Band FIR PEQ mantém os controles familiares de cinco bandas do 5Band PEQ, ma
 - Os marcadores numerados correspondem às cinco bandas. Arraste na horizontal para alterar Freq e na vertical para alterar Gain; as bandas desativadas aparecem esmaecidas.
 - A linha de status indica se o FIR está sendo projetado, preparado ou usado e mostra a latência total de processamento em samples e milissegundos.
 - Se os Taps escolhidos não conseguirem reproduzir com precisão uma resposta extrema, o status recomenda aumentar Taps ou reduzir Q ou Slope.
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## 5Band PEQ
 
@@ -270,6 +275,7 @@ Um equalizador flexível de 5 bandas para moldar o som da música. Use quando o 
 - Atualização da curva em tempo real conforme os ajustes mudam
 - Grade de frequência e ganho
 - Leituras numéricas precisas para todos os parâmetros
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## Band Pass Filter
 
@@ -316,6 +322,7 @@ Um filtro passa-banda de precisão que combina filtros passa-alta e passa-baixa 
 - Visualização clara de ambas inclinações do filtro e pontos de corte
 - Controles interativos para ajuste preciso
 - Grade de frequência com marcadores em pontos de referência chave
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## Comb Filter
 
@@ -364,6 +371,7 @@ Um filtro pente que adiciona caráter faseado, oco, metálico ou ressonante ao m
 - Marcador de frequência fundamental mostrando o tempo de atraso
 - Controles interativos para ajuste preciso
 - Cálculo da distância de atraso em milímetros
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## Earphone Cable Sim
 
@@ -414,6 +422,7 @@ Clique em **Predefinições de efeito** no cabeçalho do efeito para comparar co
 - Os rótulos da grade cobrem 20Hz a 20kHz; a curva exibida se estende por toda a faixa do gráfico, de 10Hz a 40kHz
 - Curva de resposta verde sobre uma grade escura, com eixo em dB ajustado automaticamente em torno da referência normalizada de 0dB
 - Desvios maiores na curva indicam onde o modelo altera mais o nível de reprodução
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## Group Delay EQ
 
@@ -444,6 +453,7 @@ A latência total é o valor de Latency mais metade dos Taps. Ela não muda enqu
 - A curva cinza é o alvo: o atraso solicitado, interpolado em um eixo logarítmico de 20 Hz a 20 kHz. O eixo de atraso se redimensiona conforme os ajustes atuais, a partir de ±5 ms.
 - A curva verde é o que o filtro projetado realmente faz. Onde as duas coincidem, o ajuste é realizado por completo; onde se separam, o filtro não consegue seguir o pedido com os Taps atuais.
 - A linha de status mostra a latência total em samples e milissegundos e a ondulação de magnitude do filtro. A ondulação mede quanto a resposta de magnitude realizada se afasta do objetivo de projeto plano: valores menores ficam mais perto do objetivo, e 0,3 dB é o limite do aviso de precisão.
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## Group Delay PEQ
 
@@ -467,7 +477,7 @@ Para o som, só importam as diferenças entre frequências. Um filtro que atrasa
   - **Low Shelf** - Um degrau suave que mantém Delay abaixo de Freq, passa pela metade de Delay em Freq e cai a zero acima dela. Q define a inclinação da transição: com Q 1 ela coincide com a transição de atraso de grupo de um allpass de primeira ordem, enquanto Q de 2 a 4 dá o degrau prático de cerca de uma oitava usado no alinhamento limitado em banda.
   - **High Shelf** - A imagem espelhada de Low Shelf e seu complemento: com a mesma Freq e o mesmo Q, as duas formas somam um Delay constante.
   - **Filter GD** - Soma ou subtrai tal como é a forma do atraso de grupo de um estágio de filtro analógico (passa-altas, divisor de frequências ou ressonância). Coloque em Freq e Q a frequência de corte e o Q do filtro que você está corrigindo, e em Delay a altura da corcova na curva de atraso de grupo medida, com valor negativo para cancelá-la.
-- **Freq** - Define a frequência da banda entre 20 Hz e 20 kHz.
+- **Freq** - Define a frequência da banda entre 20 Hz e 20 kHz. Perto de 18 a 20 kHz o alvo é atenuado suavemente até zero, então uma banda posicionada perto do topo da faixa tem efeito reduzido.
 - **Delay** - Define em milissegundos o valor extremo da curva da própria banda. Valores positivos fazem aquela região chegar mais tarde; negativos, mais cedo. A faixa cobre todo o atraso que o filtro consegue conter: a 96 kHz são ±18,6 ms com 4096 taps e ±149,3 ms com 32768 taps. Alterar Taps ou a taxa de amostragem limita os valores salvos ao novo máximo.
 - **Q** - Define a largura ou a inclinação da forma entre 0,1 e 100 em um controle deslizante logarítmico e é usado por todos os Type. As faixas úteis diferem: de 0,25 a 16 para Low Shelf e High Shelf e de 0,1 a 10 para Filter GD. Na prática, os shelves são usados com Q de 2 a 4 e o Filter GD com Q de 0,5 a 8 — 0,5 corresponde a um allpass de primeira ordem ou a uma soma LR2, 0,7071 a um alinhamento Butterworth ou a uma soma LR4, e 8 a uma ressonância estreita. Ajustes fora dessas faixas também são aceitos; a linha de status avisa quando os Taps atuais não conseguem realizá-los.
 - **Enabled** - Liga ou desliga cada uma das cinco bandas. Bandas desativadas não contribuem para a curva alvo e aparecem esmaecidas no gráfico.
@@ -480,9 +490,9 @@ A latência total é o valor de Latency mais metade dos Taps. Ela não muda enqu
 
 - A curva cinza é o alvo: a soma das formas das bandas ativas, desenhada em um eixo logarítmico de frequência. O eixo de atraso se redimensiona conforme os ajustes atuais, a partir de ±5 ms.
 - A curva verde é o que o filtro projetado realmente faz. Onde as duas coincidem, o ajuste é realizado por completo; onde se separam, o filtro não consegue seguir o pedido com os Taps atuais.
-- Perto de 18 a 20 kHz o alvo é atenuado suavemente até zero. Essa queda no extremo agudo faz parte do projeto, então uma banda posicionada perto do topo da faixa é mostrada — e realizada — com efeito reduzido.
 - Os marcadores numerados correspondem às cinco bandas. Arraste na horizontal para alterar Freq e na vertical para alterar Delay. O marcador fica sobre a curva apenas com Peak: um shelf passa pela metade de Delay em Freq, e o Filter GD atinge seu valor extremo abaixo de Freq: logo abaixo com Q alto e cada vez mais abaixo conforme Q diminui, até que com Q de cerca de 0,577 ou menos o valor extremo fica na extremidade grave do gráfico.
 - A linha de status mostra a latência total em samples e milissegundos e a ondulação de magnitude do filtro. A ondulação mede quanto a resposta de magnitude realizada se afasta do objetivo de projeto plano: valores menores ficam mais perto do objetivo, e 0,3 dB é o limite do aviso de precisão.
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## Hi Pass Filter
 
@@ -520,6 +530,7 @@ Um filtro passa-alta de precisão que remove frequências baixas indesejadas, pr
 - Visualização clara da inclinação do filtro e do ponto de corte
 - Controles interativos para ajuste preciso
 - Grade de frequência com marcadores em pontos de referência chave
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## Lo Pass Filter
 
@@ -561,6 +572,7 @@ Um filtro passa-baixa de precisão que remove frequências altas indesejadas, pr
 - Visualização clara da inclinação do filtro e do ponto de corte
 - Controles interativos para ajuste preciso
 - Grade de frequência com marcadores em pontos de referência chave
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## Loudness Equalizer
 
@@ -614,6 +626,7 @@ Um equalizador especializado que vincula o ajuste de volume à correção do equ
 - Controles interativos de parâmetros
 - Curva de correção dependente do volume; a alteração uniforme de nível causada por Relative Volume não aparece no gráfico
 - Leituras numéricas precisas
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## Narrow Range
 
@@ -653,6 +666,7 @@ Uma ferramenta que permite focar em partes específicas da música, filtrando fr
 - Gráfico claro mostrando a resposta de frequência
 - Controles de frequência fáceis de ajustar
 - Menus suspensos simples para seleção de inclinação
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
 
 ## Room EQ
 
@@ -705,11 +719,11 @@ A medição é uma referência local do dispositivo. Uma URL ou preset guarda se
 
 - Use os botões de opção **Graph**, fora do gráfico, para alternar entre **Frequência**, **Fase**, **Atraso de grupo mínimo**, **Atraso de grupo excedente** e **Impulso**.
 - **Fase** mostra a frequência em escala logarítmica no eixo horizontal e a fase de -180° a 180° no vertical. A linha cinza representa a fase antes da correção e a verde, a fase calculada após a aplicação do FIR real. O início medido é removido das duas linhas, e o atraso fixo conhecido do FIR também é removido do resultado corrigido; assim, o gráfico mostra a mudança de fase introduzida pelo filtro sem esses deslocamentos temporais fixos. Se a medição não contiver resposta ao impulso, será exibida uma mensagem informando que os dados não estão disponíveis.
-- **Atraso de grupo mínimo** mostra o atraso associado à parte de fase mínima da resposta de magnitude. **Atraso de grupo excedente** mostra separadamente o atraso restante após remover essa parte, facilitando a análise de reflexões e de outros comportamentos temporais que não são de fase mínima. Ambas as vistas usam frequência logarítmica no eixo horizontal e milissegundos no vertical. Os valores mantêm o atraso de grupo absoluto em relação ao início medido: esse início é removido e, do resultado corrigido, também se remove o atraso fixo conhecido do FIR. Eles não são referenciados novamente em 1 kHz, portanto o valor nesse ponto não precisa ser 0 ms. A linha cinza representa o estado antes da correção e a verde, o resultado calculado após a aplicação do FIR real. A análise do atraso de grupo independe do espaçamento entre os pontos exibidos e não depende do desenrolamento da fase. Smoothing é aplicado em uma grade fixa de frequência logarítmica, portanto valores menores revelam mais detalhes. **Atraso de grupo mínimo** ajusta automaticamente a faixa vertical às curvas exibidas. **Atraso de grupo excedente** mantém uma faixa fixa de -100 a +100 ms, mas a leitura ao passar o ponteiro preserva o valor sem recorte quando a curva ultrapassa esse limite. Se a medição não contiver resposta ao impulso, será exibida uma mensagem informando que os dados não estão disponíveis.
+- **Atraso de grupo mínimo** mostra o atraso associado à parte de fase mínima da resposta de magnitude. **Atraso de grupo excedente** mostra separadamente o atraso restante após remover essa parte, facilitando a análise de reflexões e de outros comportamentos temporais que não são de fase mínima. Ambas as vistas usam frequência logarítmica no eixo horizontal e milissegundos no vertical. Os valores mantêm o atraso de grupo absoluto em relação ao início medido: esse início é removido e, do resultado corrigido, também se remove o atraso fixo conhecido do FIR. Eles não são referenciados novamente em 1 kHz, portanto o valor nesse ponto não precisa ser 0 ms. A linha cinza representa o estado antes da correção e a verde, o resultado calculado após a aplicação do FIR real. A análise do atraso de grupo independe do espaçamento entre os pontos exibidos e não depende do desenrolamento da fase. Smoothing é aplicado em uma grade fixa de frequência logarítmica, portanto valores menores revelam mais detalhes. **Atraso de grupo mínimo** ajusta automaticamente a faixa vertical às curvas exibidas. **Atraso de grupo excedente** mantém uma faixa fixa de -100 a +100 ms, mas a leitura preserva o valor sem recorte quando a curva ultrapassa esse limite. Se a medição não contiver resposta ao impulso, será exibida uma mensagem informando que os dados não estão disponíveis.
 - **Impulso** mostra o ponto selecionado ou, quando Reference Point está em Consenso, a forma de onda média alinhada no tempo. O intervalo vai de 2 ms antes do início medido até o maior valor entre 5 ms, Direct Window e, quando Reverb Correction está acima de 0%, Reverb Window limitado a 50 ms. A linha cinza representa o sinal antes da correção e a verde, o resultado calculado após a aplicação do FIR real. O início medido é a referência comum de 0 ms e apenas o atraso fixo conhecido do FIR é removido da forma de onda corrigida, de modo que a posição relativa do pico e o pré-ringing permaneçam visíveis. As duas linhas usam a mesma escala de amplitude normalizada. Low-frequency Phase Extension e Reverb Correction podem analisar uma parte da resposta posterior ao limite desta visualização. Somente para esta exibição, os componentes a partir de 20 kHz são removidos; isso não afeta o filtro de correção nem o processamento de áudio. Se a medição não contiver dados de resposta ao impulso, será exibida uma mensagem informando que eles não estão disponíveis.
 - **Frequência** mostra a frequência em escala logarítmica no eixo horizontal e o nível em dB no vertical.
 - O seletor **Preview channel**, fora do gráfico, aparece apenas quando há filtros projetados para mais de um canal; ele escolhe de qual canal a resposta é exibida no gráfico e usada como base do EQ adicional, e não afeta o áudio.
-- Ao mover o ponteiro sobre o gráfico, cada curva recebe um ponto na posição horizontal do ponteiro e sua leitura aparece à direita do nome correspondente na legenda, com a frequência do próprio ponteiro — ou o tempo, na visualização Impulso — acima delas. A leitura desaparece quando o ponteiro sai do gráfico.
+- Passe o cursor sobre o gráfico, ou toque e arraste, para marcar cada curva com um ponto nessa posição e mostrar sua leitura ao lado do nome correspondente na legenda, com a frequência — ou o tempo, na visualização Impulso — acima delas.
 - As duas linhas verticais brancas pontilhadas marcam as frequências definidas por Correction Low e Correction High.
 - Os marcadores permitem ajustar a frequência e o ganho de cada banda.
 - A linha cinza-clara mostra a resposta em frequência medida e suavizada com o deslocamento de exibição comum do gráfico.
@@ -717,6 +731,81 @@ A medição é uma referência local do dispositivo. Uma URL ou preset guarda se
 - A linha verde brilhante mostra essa correção com o EQ adicional aplicado. Essa resposta de magnitude combinada é integrada ao FIR.
 - A linha branca mostra a resposta corrigida estimada obtida ao somar a correção combinada em verde brilhante à resposta medida em cinza-claro. As linhas cinza e branca compartilham um deslocamento que coloca em 0 dB o nível de destino da correção automática de 100%; os limites de Max Boost podem deixar desvios residuais, enquanto o Additional EQ remodela intencionalmente a resposta ao redor dessa referência. É uma visualização calculada, não uma nova medição acústica.
 - O status abaixo dos controles mostra a latência total, a resolução FIR e se o filtro está em bypass, staged, preparing, active ou error.
+
+## Tonal Balance EQ
+
+Mede o equilíbrio tonal de longo prazo do que está tocando e o aproxima aos poucos do equilíbrio típico das músicas lançadas no estilo escolhido. Use-o quando gravações, playlists ou streams soarem sempre abafados, brilhantes demais, com graves inchados ou magros, e você quiser uniformizá-los sem ajustar um EQ à mão para cada música. Ele corrige a gravação, não as caixas ou a sala; para isso, use o Room EQ.
+
+O plugin compara o espectro medido com o alvo depois de igualar o nível geral dos dois; assim, só a forma do equilíbrio importa, e não o volume da gravação. Ele reduz as regiões fortes demais e depois eleva o sinal inteiro com um único ganho de make-up, de modo que o volume percebido continua o mesmo e as regiões mais fracas ganham presença. Não eleva regiões sem conteúdo musical real, como o topo vazio de uma gravação com banda limitada ou um chiado constante; um som estável e parecido com ruído, como um pad de sintetizador que não muda, recebe o mesmo tratamento, assim como um som que continua soando no mesmo nível até nas passagens silenciosas, porque não pode ser distinguido do ruído de fundo. Silêncio e passagens silenciosas não entram na medição. Todos os canais recebem a mesma correção, então a imagem estéreo não muda, e o plugin não adiciona atraso.
+
+Os alvos foram aprendidos a partir dos espectros de longo prazo de uma coleção de músicas publicada sob licenças permissivas. Cada estilo tem uma curva típica e uma variação típica entre músicas. Já o **Tilt** é uma referência fixa: plano nos graves e, acima deles, em queda com uma inclinação constante. Qualquer alvo pode ser remodelado ao seu gosto com as cinco bandas do Target Adjust.
+
+### Guia de aprimoramento do som
+- **Playlists variadas e streaming**: Comece com os valores padrão (Target **All**, Amount 100%, Averaging Time 30 s). A correção entra aos poucos, ao longo de dezenas de segundos, à medida que a medição fica confiável; por isso, compare com o plugin desligado depois de cerca de meio minuto de música.
+- **Uma correção estável para o álbum inteiro**: Pressione **Reset** no início do álbum e ajuste Averaging Time para **∞**. O plugin passa a fazer a média de tudo o que ouviu desde o Reset, então a correção se acomoda e muda cada vez menos.
+- **Música de um único estilo**: Escolha o Target mais próximo do que está tocando, como **Classical** para gravações orquestrais ou **Electronic** para música dance. All é uma boa escolha quando os estilos estão misturados.
+- **Um resultado mais suave**: Reduza Amount para cerca de 50% ou Range para cerca de 3 dB. Para corrigir apenas as inclinações amplas, sem ajustes mais estreitos, aumente Smoothing para cerca de 1 oct.
+- **Acompanhar mudanças dentro da música**: Reduza Averaging Time para algo entre 0,5 e 1 s, para que um verso escuro e um refrão brilhante sejam corrigidos separadamente. Se perceber o timbre oscilando, aumente Averaging Time de novo.
+- **Deixar os extremos intactos**: Aumente Low para não remodelar os graves mais profundos, ou reduza High para não remodelar a oitava mais alta.
+- **Sua própria curva de preferência**: Molde o alvo com o Target Adjust. Por exemplo, um High shelf de +1,5 dB em 8 kHz com Q 0,7 pede um equilíbrio um pouco mais brilhante, e um Peak largo de -2 dB em torno de 300 Hz com Q 0,7 pede menos peso nos médios-graves. Cada gravação é então aproximada dessa forma só até onde precisa, em vez de todas receberem o mesmo EQ.
+- **Uma referência mecânica**: Escolha o Target **Tilt**. O Slope padrão de -6 dB/oct pede um equilíbrio um pouco mais escuro que o da maioria das músicas lançadas; ajuste Slope para cerca de -4,5 a -5 dB/oct para um equilíbrio mais típico, ou para -3 dB/oct, a referência do ruído rosa, para um mais brilhante.
+
+O ganho de make-up preserva o volume percebido, não o nível de pico, então os picos podem subir. Se ocorrer clipping em um estágio posterior, reduza o nível depois deste plugin ou acrescente um limitador.
+
+### Parâmetros
+- **Target** - O equilíbrio tonal que é o objetivo: **All**, **Classical**, **Electronic**, **Pop**, **Rock** ou **Tilt** (padrão All)
+  - All é uma mistura dos quatro estilos com pesos iguais
+  - Tilt é uma referência fixa, não um estilo aprendido: plano abaixo de Corner e, acima dele, em queda com a inclinação de Slope
+- **Slope** - Exibido apenas quando Target é Tilt. A inclinação com que o alvo cai acima de Corner (-18 dB/oct a 0 dB/oct, padrão -6 dB/oct)
+  - -3 dB/oct corresponde ao ruído rosa, que tem a mesma energia em todas as oitavas; 0 dB/oct corresponde ao ruído branco e -6 dB/oct, ao ruído marrom
+  - As gravações comerciais típicas têm em média cerca de -5 dB/oct (Pestana et al.); por isso, o padrão pede um equilíbrio um pouco mais escuro que o da música típica. Um Slope mais suave pede mais agudos; quanto mais inclinado (mais negativo), mais o equilíbrio pende para os graves
+- **Corner** - Exibido apenas quando Target é Tilt. A frequência abaixo da qual o alvo permanece plano (20 Hz a 1000 Hz, padrão 250 Hz)
+  - Valores menores estendem a inclinação mais fundo nos graves, pedindo mais graves profundos
+  - Valores maiores mantêm uma parte maior dos graves plana, pedindo menos graves
+- **Amount** - Quanto da correção é aplicado (0% a 100%, padrão 100%)
+  - Valores menores reduzem a correção inteira; em 0% o som não muda
+  - Em 0% a medição e o gráfico continuam funcionando, e Range, Smoothing, Low e High ficam desativados
+- **Range** - A maior correção que qualquer banda pode receber, para cima ou para baixo (0 dB a 12 dB, padrão 6 dB)
+  - Valores menores deixam as mudanças sutis; 0 dB desliga a correção
+  - Valores maiores permitem aproximar do alvo gravações que estão longe dele
+- **Smoothing** - A largura dos contornos da curva de correção (0,1667 oct a 2 oct, padrão 0,5 oct)
+  - Valores maiores produzem inclinações amplas e suaves
+  - Valores menores seguem o alvo mais de perto, incluindo picos e vales mais estreitos
+- **Averaging Time** - Por quanto tempo a medição faz a média (0,1 s a ∞, padrão 30 s)
+  - Valores curtos fazem o timbre acompanhar as mudanças dentro da música
+  - Valores longos dão uma correção estável, que muda devagar de uma música para outra
+  - A extremidade direita do slider é **∞**: o plugin faz a média de tudo desde o último Reset. Também é possível digitar ∞ na caixa de valor
+- **Low** - O limite inferior da faixa corrigida (20 Hz a 200 Hz, padrão 20 Hz)
+  - Abaixo dele, a correção permanece no valor que tem em Low
+  - Aumente-o para não remodelar os graves mais profundos
+- **High** - O limite superior da faixa corrigida (2000 Hz a 20000 Hz, padrão 16000 Hz)
+  - Acima dele, a correção permanece no valor que tem em High
+  - Reduza-o para não remodelar a oitava mais alta
+- **Average SPL** - O nível médio estimado de pressão sonora na posição de audição, como no Loudness Equalizer (60 dB a 96 dB, padrão 83 dB)
+  - Serve apenas para decidir quais bandas fracas são altas o bastante para serem ouvidas e, portanto, podem ser elevadas; não altera o nível de saída
+  - Valores menores tratam mais bandas fracas como inaudíveis, e elas não são elevadas
+  - Valores maiores contam mais bandas fracas como conteúdo musical audível
+- **Target Adjust** - Cinco bandas abaixo do gráfico que remodelam o alvo, com os mesmos controles do Additional EQ do Room EQ e do 5Band PEQ
+  - Cada banda pode ser ligada ou desligada e definida como Peak, Low shelf ou High shelf
+  - Frequência: 20 Hz a 20 kHz (padrões 100 Hz, 316 Hz, 1 kHz, 3,16 kHz e 10 kHz)
+  - Gain: -20 dB a +20 dB (padrão 0 dB). Valores positivos pedem mais daquela região e negativos, menos; em 0 dB o alvo não muda
+  - Q: 0,1 a 10, limitado a 2 nos shelves (padrão 0,7). Valores maiores afetam uma faixa mais estreita
+
+O Target Adjust muda apenas o alvo. O plugin continua medindo cada gravação e a aproxima do alvo ajustado com os mesmos Amount, Range, Smoothing, Low e High; não é um EQ extra aplicado por cima. Por isso, elevar o alvo inteiro na mesma medida não muda nada: o nível geral é igualado antes da comparação e o volume percebido continua o mesmo. Regiões sem conteúdo musical real continuam sem ser elevadas, e abaixo de Low e acima de High a correção segue mantida como de costume. O alvo é seguido em bandas do tamanho da percepção auditiva e depois suavizado; por isso, um pico ou entalhe estreito é alargado e fica menor, como o gráfico mostra. Para ajustes estreitos, use o 5Band PEQ. Range continua limitando a correção em todas as bandas, então um ajuste grande pode exigir um Range maior.
+
+### Exibição visual
+- O eixo horizontal mostra a frequência de cerca de 26 Hz a 18,6 kHz, e o vertical, o nível em dB. A escala vertical se amplia para comportar a faixa do alvo, a linha EQ response, o nível medido dentro da faixa corrigida e os marcadores e a curva do Target Adjust, e volta a ±12 dB com Reset ou ao mudar o Target. Pontos medidos muito distantes do alvo podem ficar fora do gráfico.
+- **Target** é a linha do equilíbrio alvo, incluindo o Target Adjust, desenhada de modo que sua média fique em 0 dB. Quando se escolhe um estilo, a faixa sombreada ao redor dela mostra a variação típica entre músicas desse estilo; o Tilt, que é uma referência fixa, não tem faixa. Os níveis são exibidos por hertz (densidade espectral); por isso, um alvo Tilt é desenhado plano abaixo de Corner e, acima dele, como uma reta que cai conforme o Slope; o ruído rosa é uma reta de -3 dB/oct.
+- **Measured** é a linha com pontos: o espectro de longo prazo medido, deslocado para se alinhar ao alvo. Onde ela fica abaixo da faixa do alvo, a gravação está mais fraca que o típico; onde fica acima, está mais forte. A medição fica pausada enquanto você ouve uma frequência de teste e é retomada quando a prévia termina.
+- **EQ response** é a linha grossa: o ganho que o plugin aplica, incluindo o ganho de make-up. 0 dB significa sem alteração.
+- **Withheld lift** é a área preenchida que sobe a partir da linha EQ response. Sua altura, exibida na leitura como um valor aproximado em dB, indica quanto reforço adicional a banda teria recebido se não tivesse sido retida por ser mal reconhecida como conteúdo musical (veja acima). É um tamanho aproximado, não um ganho exato, e acompanha Amount e Range.
+- **Target adjust** é a curva fina em torno de 0 dB: a resposta combinada das bandas do Target Adjust exatamente como você as definiu. Os marcadores numerados mostram cada banda em sua frequência e seu ganho, sendo que 0 dB significa sem alteração; eles não ficam sobre a linha Target. Arraste um marcador na horizontal para alterar a frequência e na vertical para alterar o Gain, gire a roda do mouse sobre ele para alterar Q e clique com o botão direito para ligar ou desligar a banda. Bandas desativadas aparecem esmaecidas.
+- Durante a reprodução, a linha Target acompanha os marcadores em instantes; onde ela fica mais suave que a curva Target adjust, essa parte do pedido está sendo diluída pela média. Com a reprodução parada, a linha Target mantém a forma da última medição e a curva Target adjust mostra o que você pediu. Alterações de Slope e Corner feitas com a reprodução parada aparecem na linha Target quando ela é retomada.
+- As regiões abaixo de Low e acima de High aparecem escurecidas.
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto. Além das curvas, a leitura mostra **Presence**, a parcela do tempo medido em que aquela banda foi reconhecida como conteúdo musical audível, o **Make-up gain** atual e a **Loudness** de tudo o que foi medido desde o último Reset, em LKFS.
+- Antes de qualquer áudio ser medido, o gráfico mostra "Play audio to start measuring". Os marcadores do Target Adjust e a curva Target adjust continuam sendo exibidos e podem ser editados.
+- **Reset** apaga a medição e recomeça a partir do áudio atual; o Target Adjust não é alterado. A medição também recomeça quando o processamento é retomado depois de uma pausa de economia de energia durante o silêncio.
+- **Copy as PEQ** copia a curva EQ response do gráfico como configurações do 5Band PEQ. Pressione Ctrl+V no Effect Pipeline para adicionar um 5Band PEQ com essa curva antes do efeito selecionado, ou no final se nenhum estiver selecionado. Para manter a correção atual fixa, desligue ou remova o Tonal Balance EQ. O 5Band PEQ reproduz o formato da curva entre Low e High, mas não o seu nível geral, então o volume pode mudar um pouco. O botão fica disponível quando o gráfico mostra a curva EQ response e Amount está acima de 0%.
 
 ## Tone Control
 
@@ -758,6 +847,8 @@ Um ajustador de som simples de três bandas para personalização rápida e fác
 - Gráfico de fácil leitura mostrando seus ajustes
 - Sliders simples para cada controle
 - Botão de reinicialização rápida
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.
+
 ## Tilt EQ
 
 Um equalizador simples mas eficaz que inclina suavemente o equilíbrio de frequências da sua música. Projetado para ajustes sutis que podem aquecer ou clarear o som sem controles complexos. Ideal para adaptar rapidamente o tom geral às suas preferências.
@@ -786,3 +877,4 @@ Um equalizador simples mas eficaz que inclina suavemente o equilíbrio de frequ�
 - Slider simples para ajuste de Slope
 - Curva de resposta em frequência em tempo real
 - Exibição clara do valor atual de Slope
+- Passe o cursor sobre o gráfico, ou toque e arraste, para ler os valores nesse ponto.

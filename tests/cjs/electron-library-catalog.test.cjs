@@ -203,6 +203,8 @@ function assertCode(code) {
   };
 }
 
+const catalogRuntimeCoreSource = fs.readFileSync(path.join(__dirname, '../../js/library/repository/catalog-runtime-core.js'), 'utf8');
+
 test('catalog host requires a caller-supplied canonical absolute database path', async () => {
   assert.throws(() => new LibraryCatalogHost(), assertCode('invalidDatabasePath'));
   assert.throws(
@@ -231,7 +233,7 @@ test('DatabaseSync is isolated in a worker with shared schema, FTS5, WAL, and bo
   assert.equal(capabilities.maxResponseBytes, MAX_LIBRARY_CATALOG_RESPONSE_BYTES);
   assert.equal(fs.existsSync(dbPath), true);
 
-  const workerSource = fs.readFileSync(path.join(__dirname, '../../electron/library-catalog-worker.cjs'), 'utf8');
+  const workerSource = fs.readFileSync(path.join(__dirname, '../../electron/library-catalog-worker.cjs'), 'utf8') + '\n' + catalogRuntimeCoreSource;
   const hostSource = fs.readFileSync(path.join(__dirname, '../../electron/library-catalog-host.cjs'), 'utf8');
   assert.match(workerSource, /DatabaseSync/);
   assert.doesNotMatch(hostSource, /DatabaseSync|node:sqlite/);
@@ -771,7 +773,7 @@ test('Electron folder browsing mirrors physical hierarchy counts and direct-trac
   const workerSource = fs.readFileSync(
     path.join(__dirname, '../../electron/library-catalog-worker.cjs'),
     'utf8'
-  );
+  ) + '\n' + catalogRuntimeCoreSource;
   assert.match(workerSource, /DELETE FROM directories\s+WHERE folder_id = \? AND relative_path = \? AND recursive_track_count = 0/);
   assert.doesNotMatch(workerSource, /DELETE FROM directories WHERE folder_id = \? AND recursive_track_count = 0/);
   assert.match(workerSource, /folder_id = \?[\s\S]*instr\(t\.relative_path, '\/'\) = 0/);

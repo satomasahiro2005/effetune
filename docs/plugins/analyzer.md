@@ -1,6 +1,6 @@
 ---
 title: "Analyzer Plugins - EffeTune"
-description: "Audio analysis plugins including Chroma Spiral, Level Meter, Note Spectrogram, Oscilloscope, Pitch Meter, Spectrogram, Spectrum Analyzer, and Stereo Meter."
+description: "Audio analysis plugins including Analog Meter, Chroma Spiral, Level Meter, Note Spectrogram, Oscilloscope, Pitch Meter, Rhythm Analyzer, Spectrogram, Spectrum Analyzer, and Stereo Meter."
 lang: en
 ---
 
@@ -10,14 +10,86 @@ A collection of plugins that let you see your music in fascinating ways. These v
 
 ## Plugin List
 
+- [Analog Meter](#analog-meter) - Shows channel levels on a needle meter with VU, PPM, peak, and loudness scales
 - [Chroma Spiral](#chroma-spiral) - Places frequency components around a note and octave spiral
 - [Level Meter](#level-meter) - Shows digital signal level and possible clipping
 - [Note Spectrogram](#note-spectrogram) - Shows estimated pitches over time as a piano roll
 - [Oscilloscope](#oscilloscope) - Shows real-time waveform visualization
 - [Pitch Meter](#pitch-meter) - Tracks one fundamental pitch and its tuning over time
+- [Rhythm Analyzer](#rhythm-analyzer) - Shows the tempo, the hits beat by beat, and how early or late each part plays
 - [Spectrogram](#spectrogram) - Creates beautiful visual patterns from your music
 - [Spectrum Analyzer](#spectrum-analyzer) - Shows the different frequencies in your music
 - [Stereo Meter](#stereo-meter) - Visualizes stereo balance and phase relationships
+
+## Analog Meter
+
+Shows the level of each channel on a classic needle meter without changing the sound. Use it to follow how loud your music is from moment to moment, or to see how your playback reads on the scales used in broadcasting and streaming: VU, PPM, peak, and loudness (LUFS).
+
+### Listening Guide
+
+- **Follow the average level with VU**: Watch the needle through a song. Quiet verses and loud choruses show a clear difference, while short drum hits barely move the needle.
+- **Check for clipping with True Peak**: Place Analog Meter after your EQ and gain effects and play the loudest part of a track. If the reading goes above 0 dBFS or the over lamp lights, the chain can clip; lower the gain until the peaks stay below 0 dBFS, with a little margin such as -1 dBFS.
+- **Compare songs with Loudness**: Set **Target** to a streaming reference such as -14 LUFS, press **Reset** at the start of a song or album, and play it through. The Integrated value shows its overall loudness and the maximum True Peak shows its highest peak, which gives a guide for matching volume across an album or playlist. LRA lets you compare how widely the loudness of each song varies.
+
+### System Presets
+
+Click **Effect Presets** in the effect header to set the meter to a well-known standard in one step. A preset that changes **Mode** starts the measurement over; switching between the Loudness presets keeps the measurement running.
+
+- **Studio VU (-18 dBFS)** - VU with 0 VU at -18 dBFS, the common studio alignment (EBU R68). Suits recordings with plenty of headroom.
+- **SMPTE VU (-20 dBFS)** - VU with 0 VU at -20 dBFS (SMPTE RP 155), the practice in North American studios and broadcasting.
+- **Hot VU (-14 dBFS)** - The default settings: VU with 0 VU at -14 dBFS, which suits most finished commercial recordings.
+- **Loud Master VU (-8 dBFS)** - VU with 0 VU at -8 dBFS, for loudness-maximized modern CDs and pop masters that would otherwise hold the needle at the top.
+- **DIN PPM** - The DIN meter (**Attack** 5 ms, 20 dB fall in 1.5 s, DIN scale) with the -9 mark at -18 dBFS, so 0 is at -9 dBFS. The scale reaches down to -50.
+- **BBC PPM** - The BBC meter (**Attack** 10 ms, 24 dB fall in 2.8 s, BBC scale) with mark 4 at -18 dBFS, so mark 6 is at -10 dBFS.
+- **Nagra Modulometer** - The modulometer of Nagra tape recorders (**Attack** 7.5 ms, dB scale from -30 to +5 dB) with 0 dB at -18 dBFS. **Release** uses the DIN value of 1.5 s.
+- **K-20** - Bob Katz's K-System on an RMS meter, with 0 at -20 dBFS and the scale reaching down to -60 dBFS. For recordings with wide dynamics.
+- **K-14** - The same with 0 at -14 dBFS, down to -60 dBFS. For typical pop music.
+- **K-12** - The same with 0 at -12 dBFS, down to -60 dBFS. For tightly compressed material made for broadcast.
+- **Digital Peak** - A standard digital peak meter (IEC 60268-18) from -60 to 0 dBFS with a 2 s peak hold.
+- **True Peak Clip Watch** - True Peak zoomed to the top 20 dB with the longest peak hold (10 s), for catching peaks above 0 dBFS after EQ or gain changes.
+- **EBU R128 (-23 LUFS)** - Loudness with the European broadcast target and the EBU +9 scale.
+- **EBU R128 +18 Scale** - The same target with the wider EBU +18 scale, for classical music and other material with wide dynamics.
+- **TV (-24 LKFS)** - Loudness with the -24 LKFS target used for TV in the US (ATSC A/85) and Japan (ARIB TR-B32).
+- **Streaming (-14 LUFS)** - Loudness with a -14 LUFS target, close to the volume normalization of many music streaming services, and the calmer Short-term needle.
+- **Streaming (-16 LUFS)** - Loudness with the -16 LUFS target recommended for streaming and podcasts (AES TD1008), and the Short-term needle.
+
+### Parameters
+
+Only the controls that apply to the selected **Mode** are shown.
+
+- **Mode** - Selects the meter type: **VU** (default), **PPM**, **RMS**, **Sample Peak**, **True Peak**, or **Loudness**. Each mode moves the needle differently and uses its own scale (see the Visualization Guide). Changing the mode starts the measurement over.
+- **Integration** (RMS; 0.05 to 3 s; default 0.3 s) - Sets the averaging time. Longer values give a steadier, slower needle; shorter values follow changes more quickly.
+- **Attack** (PPM; 1 to 20 ms; default 5 ms) - Sets how quickly the PPM needle rises, as the length of a tone burst that reads 2 dB below a steady tone. Shorter values show brief peaks closer to their full level; longer values let brief peaks read lower. 5 ms matches the DIN meter.
+- **Release** (PPM, Sample Peak, True Peak; 0.1 to 5 s; default 1.5 s) - Sets the time the needle takes to fall 20 dB after a peak. Longer values make peaks easier to read; shorter values follow the music more closely. 1.5 s matches the DIN meter and the standard digital peak meter.
+- **Reference** (VU, PPM, RMS; -30 to 0 dBFS; default -14 dBFS) - Sets the digital level that lands on the meter's reference mark. The default suits most finished commercial recordings; with the studio alignments of -18 or -20 dBFS (see System Presets), ordinary CDs often hold the needle near the top of the scale. Raise it when loud recordings push the needle to the top of the scale; lower it when quiet recordings barely move the needle.
+- **Range** (PPM with the DIN or dB scale, RMS, Sample Peak, True Peak; 20 to 60 dB; default 40 dB) - Sets how far down the scale reaches. Widen it to see quiet passages; narrow it to spread out the upper part of the scale.
+- **PPM Scale** (PPM; default DIN) - Selects the PPM scale: **DIN**, **BBC**, or **dB** (see the Visualization Guide).
+- **Peak Hold** (PPM, RMS, Sample Peak, True Peak; 0 to 10 s; default 1 s) - Sets how long the peak mark stays at the highest recent reading, and how long the over lamp stays lit. 0 turns the mark off; the over lamp then stays lit for 1 s.
+- **Needle** (Loudness; default Momentary) - Selects what the needle shows. **Momentary** follows loudness over the last 0.4 s; **Short-term** shows the last 3 s and moves more calmly.
+- **Target** (Loudness; -36 to -10 LUFS; default -23 LUFS) - Sets the loudness marked on the scale and lays out the scale relative to it. -23 LUFS is the EBU R128 broadcast level; many streaming services use values around -14 LUFS.
+- **Scale** (Loudness; default EBU +9) - Selects the width of the loudness scale. **EBU +9** covers 18 LU below to 9 LU above **Target**; **EBU +18** covers 36 LU below to 18 LU above, which suits music with wide dynamics or very loud material.
+
+### Visualization Guide
+
+- Each channel has its own meter, up to four per row and up to 16 channels.
+- Levels follow the common digital convention that a full-scale sine wave reads 0 dBFS, so a steady sine wave gives the same reading in every mode except Loudness.
+- The modes differ in how quickly the needle moves:
+
+| Mode | Needle movement | Scale |
+|---|---|---|
+| VU | Slow. It reaches a new level in about 0.3 s and shows the average level (IEC 60268-17). | -20 to +3 VU. 0 VU = **Reference**. |
+| PPM | An approximation based on IEC 60268-10. Rises quickly at the speed set by **Attack**; with the default 5 ms, a 10 ms burst reads about 1 dB below a steady tone, as on a DIN meter. Falls 20 dB in the **Release** time. | Selected by **PPM Scale**. **DIN**: the -9 mark = **Reference**, so 0 is 9 dB above it. **BBC**: marks 1 to 7, with 4 dB between marks from 2 to 7 and 6 dB between 1 and 2; mark 4 = **Reference**. **dB**: the 0 mark = **Reference**, from **Range** below it up to +5 dB. |
+| RMS | Shows the average power over the **Integration** time, with no extra smoothing. | The 0 mark = **Reference**. |
+| Sample Peak | Jumps immediately to the highest sample value. | Top of the scale = 0 dBFS. |
+| True Peak | Like Sample Peak, but also estimates peaks between samples. It can read above 0 dBFS; such peaks can clip in a DAC or during conversion. | Top of the scale = 0 dBFS. |
+| Loudness | Shows loudness in LUFS as defined by ITU-R BS.1770 and EBU R128. | Set by **Target** and **Scale**; readings are shown in LUFS. |
+
+- The peak mark shows the highest recent reading for the **Peak Hold** time. The over lamp lights when the level exceeds 0 dBFS and stays lit for the **Peak Hold** time, or for 1 s when **Peak Hold** is 0.
+- In Loudness mode, the first meter shows the whole program. Its needle follows **Needle**, and it lists Momentary (M), Short-term (S), Integrated (I), Loudness Range (LRA), the maximum True Peak, and the elapsed measurement time, with a **Reset** button. Integrated and LRA appear once enough audio has been measured.
+  - For mono, stereo, and 5.1 (channel order L, R, C, LFE, Ls, Rs), these values follow the standard channel weighting. For other channel counts, all channels are added with equal weight, so the values are for reference only.
+  - The meters after the first one show each channel on its own. These are reference values, measured without channel weighting or gating.
+- Integrated, LRA, and the maximum True Peak keep accumulating until you press **Reset**, change **Mode**, the sample rate or channel count changes, or audio processing restarts.
+- Time when processing is paused is not measured: during power-saving pauses in silence, while Master Bypass is on or Analog Meter is turned off, and while the Effect Pipeline is not visible (for example, in the Music Library, when minimized, or in Mini Player) with **Skip display-only DSP when hidden** turned on in Config (on by default). The readings continue from where they stopped.
 
 ## Chroma Spiral
 
@@ -49,6 +121,9 @@ Shows where the frequency components of your music fall among the 12 notes and a
 - Dot brightness and area, and the filled area's extent, show relative strength. The display follows recent peaks, so they are not absolute level readings.
 - Low notes are less sharply separated and respond more slowly. Nearby notes in the lowest octaves may blur together.
 
+### Visual Display
+- Hover over the display, or touch and drag on it, to read the values at that point.
+
 ## Level Meter
 
 A visual display that shows your music's digital signal level in real time. It helps you check levels after applying effects and spot possible clipping before it becomes audible distortion.
@@ -78,6 +153,9 @@ Shows estimated fundamental pitches (F0s) in a selectable range from A0 to C8 in
 - Octave and E–F guide lines are drawn behind the volume bars so the pitch grid remains a visual reference.
 - The keys blend from their normal color toward the display color as confidence in the latest frame increases, reaching that color at 1.
 - Changing **Color** recolors the existing history.
+
+### Visual Display
+- Hover over the display, or touch and drag on it, to read the values at that point.
 
 ### Listening Guide
 
@@ -115,6 +193,9 @@ Shows the shape of the sound wave in real time, so you can see beats, sharp hits
 - Grid lines help measure time and amplitude values
 - Trigger settings determine where the waveform capture begins; no separate marker is shown
 
+### Visual Display
+- Hover over the graph, or touch and drag on it, to read the values at that point.
+
 ### Parameters
 - **Display Time** - How much time to show (1 to 100 ms)
   - Lower values: See more detail in shorter events
@@ -122,6 +203,7 @@ Shows the shape of the sound wave in real time, so you can see beats, sharp hits
 - **Trigger Mode**
   - Auto: Continuous updates even without trigger
   - Normal: Freezes display until next trigger
+  - Off: No trigger; continuously shows the latest waveform as it arrives. Trigger Level, Trigger Edge, and Holdoff have no effect
 - Trigger detection uses the averaged left/right waveform. Mono input is used directly.
 - **Trigger Level** - Amplitude level that starts capture
   - Range: -1 to 1 (normalized amplitude)
@@ -147,6 +229,9 @@ Tracks one fundamental pitch (F0) at a time in a two-second scrolling piano roll
 - The current label shows the nearest note and the difference in cents. A positive value is above the note and a negative value is below it. The label disappears when there is no reliable estimate.
 - The note name uses the same note colors as Note Spectrogram. The large readout fits the available width and keeps the cents decimal point in a fixed position.
 
+### Visual Display
+- Hover over the display, or touch and drag on it, to read the values at that point.
+
 ### Listening Guide
 
 - Start with a single sustained note, then watch whether the line stays centered on a note or moves sharp or flat.
@@ -161,6 +246,75 @@ Tracks one fundamental pitch (F0) at a time in a two-second scrolling piano roll
 - **Lowest Note** - Sets the bottom of the displayed and analyzed range. Default: C2. The lowest available setting is A0.
 - **Highest Note** - Sets the top of the displayed and analyzed range. Default: C7. The highest available setting is C8.
 - Stereo input is analyzed by averaging the first two channels; mono input is used directly. Strong opposite-polarity content can cancel in the average and leave no pitch trace.
+
+## Rhythm Analyzer
+
+Finds the tempo of your music and shows, beat by beat, where the drum and instrument hits land and how early or late each part plays, without changing the sound unless **Metronome Click** is on. Use it to find a track's BPM, check how much swing a groove has, see whether the snare sits behind the beat, or spot where a fill comes in or a pattern changes.
+
+### Listening Guide
+
+- **Check the tempo**: Play a track with a clear, steady beat. After a few seconds the header shows the BPM with **LOCKED**, and the tempogram strip marks the same tempo as **adopted**. The analyzer sometimes follows a different beat level than the one you tap your foot to, so also look at **×½**, **×2**, and **strongest** in the header: if one of them matches your foot, that is the tempo you feel.
+- **Hear where the beat falls**: Turn on **Metronome Click** to hear a click on each detected beat. If the clicks fall on the beat you tap your foot to, the analyzer has found the beat. If they fall between your taps, or at twice or half your tapping speed, the analyzer is following a different beat position or level; see **Fix a lock at double or half speed** below and **Limitations**.
+- **Place it last when using the click**: The click is mixed into the audio that leaves the analyzer, so any effect after it also processes the click. Put Rhythm Analyzer at the end of the effect chain while you listen with the click.
+- **Turn the click off before processing files**: With **Metronome Click** on, the clicks are written into any file you process. Turn it off first.
+- **Fix a lock at double or half speed**: If a slow ballad locks at twice its tempo, lower **Max BPM** below that value (for example, to 100 for a 60 BPM ballad). If a fast track locks at half speed, raise **Min BPM** above that value. The analysis starts over with the new range.
+- **Read a steady groove**: With programmed music or music played to a click, the dots sit close to the center of their lanes, and **jitter** stays near 0 ms. When one part plays consistently behind or ahead of the others, its dots sit above or below the lane center at the same positions every time. A snare that is 15 ms behind the kick and hi-hat, for example, shows as Mid dots raised above the lane center on beats 2 and 4, and as a Mid mark labelled +15 in the **1** column of the beat lens.
+- **Read the swing**: **swing** shows how far the off-beat is delayed: 1.00:1 is straight, 2.00:1 is a full triplet shuffle, and values in between are a lighter swing. In clearly swung music, the beat lens places off-beat hits in the **⅔** column instead of **&**.
+- **Spot fills and section changes**: A ring marks a hit that the same band did not play at the same position one or two spans earlier. While a pattern repeats, few rings appear; a fill or the first bars of a new section show many. The echo rows below the main lanes let you compare the new pattern with the previous ones.
+- **When it shows searching**: While the beat is unclear, the header shows **searching** with the last locked tempo in parentheses, the lanes keep scrolling at that tempo inside a shaded band, and hits are drawn as hollow circles without timing. The analyzer locks once it has been sure of the beat for a full beat. With a clear, steady beat this takes a few seconds; classical music and music played with rubato can take longer. When the music stops, the analyzer stops showing the beat within half a second and locks again after the music returns.
+
+### Parameters
+
+- **Min BPM** (40 to 192; default 40) - Sets the lowest tempo the analyzer can lock to. Raise it when the analyzer locks to half of the tempo you feel.
+- **Max BPM** (50 to 240; default 240) - Sets the highest tempo the analyzer can lock to. Lower it when the analyzer locks to double the tempo you feel. The analyzer locks only to tempos between Min BPM and Max BPM, but the tempo shown can drift slightly outside it when the music speeds up or slows down. Max BPM is always kept at least 1.25 times Min BPM; when a change would break this, the other limit moves. Changing either limit starts the analysis over. The tempogram strip always covers 30 to 480 BPM, and the **×½** and **×2** lines can fall outside the selected range.
+- **Metronome Click** (on or off; default off) - Adds a short, high-pitched click on each detected beat to the audio that passes through. Clicks play only while the analyzer is locked and stop when it returns to **searching**. The click has a fixed level of about −10 dBFS and is added to channels 1 and 2 (channel 1 for mono input); other channels are not changed. When it is off, the audio passes through unchanged. Turning it on or off does not restart the analysis.
+- **Span (beats)** (4, 6, 8, 12, or 16; default 8) - Sets how many beats the main lanes and each echo row show, and how far back the rings compare. It changes only the display, not the analysis. A span that covers whole bars lines up a repeating pattern across the echo rows, for example 8 for two bars of 4/4 or 6 for two bars of 3/4.
+- **Tempogram**, **Timing lanes**, **Echo rows**, **Beat lens** (on or off; default on) - Show or hide the tempogram strip, the main lanes, the echo rows, and the beat lens. The remaining panels grow to fill the space, and the header is always shown. Hiding a panel changes only the display: the analysis continues, and the panel shows its full history again when you turn it back on.
+
+### Visualization Guide
+
+The display has five parts: the header, the tempogram strip, the main lanes, the echo rows, and the beat lens. On a wide display the beat lens sits to the right of the lanes; on a tall display all parts are stacked from top to bottom. When you hide panels with their checkboxes, the remaining panels fill the space; the header always stays. Hits are sorted into three bands: **Low** (kick drum and bass), **Mid** (snare, voices, and most instruments), and **High** (hi-hats and cymbals). All bands share one color; in the lanes, echo rows, and beat lens each band has its own row, with **High** at the top and **Low** at the bottom. Axis names, tick values, and the **High**, **Mid**, and **Low** row labels are drawn over the graphs. The display counts beats only; it does not detect bars or beat 1.
+
+- **Header**:
+  - The beat lamp to the left of the BPM lights on each beat the analyzer predicts and then fades quickly, so you can see the beat it follows; **Metronome Click** plays on the same beats. Every beat lights the same way, because the analyzer does not know where a bar starts. While the analyzer is searching, the lamp is a hollow ring.
+  - The BPM and **LOCKED** while the analyzer follows a beat. While it has not found one, it shows **searching**, with the last locked tempo as **(N BPM held)**.
+  - **×½** and **×2** - Half and double the tempo shown.
+  - **strongest** - The tempo that currently repeats most strongly in the music. It often matches the locked tempo; when it differs, it is a likely alternative.
+  - **swing** - The ratio between the first and second half of a beat, from the typical off-beat position in the last 32 beats. 1.00:1 is straight and 2.00:1 is a triplet shuffle.
+  - **jitter** - The typical random scatter of hits around their average position in the beat lens, in ms. Tight, programmed parts read near 0; loose playing reads higher.
+  - A key to the symbols: **○ no beat lock**, **◎ new vs N / 2N beats ago**, and **beat re-aligned** for the dashed line.
+  - A value that is not available yet shows —.
+- **Tempogram strip**: Shows the last 20 seconds, with **Time** running left to right and **Tempo (BPM)** on a logarithmic scale from 30 to 480, its values at the left edge. The brightness shows how clearly the music repeats at each tempo: only clear, strong repetition is drawn bright, weak or unclear repetition stays dim, and silence stays dark. Related tempos, such as half and double the beat, often appear as fainter lines. While the analyzer is locked, a solid line shows the locked tempo, and dashed lines show half and double of it; their labels **adopted**, **×2**, and **×½** sit at the right edge, just above the lines. These lines grow fainter when the analyzer is less certain of the beat.
+- **Main lanes**: The most recent beats, as many as **Span (beats)** sets, with the newest at the right edge; the caption reads **Last N beats**. Solid lines divide them into three timing graphs, one lane per band, each labelled at the left edge, with **Beats** on the horizontal axis and **Timing (ms)** on the vertical axis. Vertical lines mark the beats, and fainter lines the eighth notes; they are drawn only where the analyzer was locked. Each dot is one detected hit, joined to the lane center by a stem; the larger the dot, the more certain the analyzer is of that hit.
+  - The height of a dot in its lane shows its timing: above the lane center (0 ms) is late, below is early. Dotted lines labelled **+20** and **−20** mark ±20 ms, and hits beyond ±30 ms stay at the lane edge. Timing is measured from the nearest sixteenth-note or triplet position, whichever grid the music follows, and is shown relative to the typical timing of the preceding 16 beats. A constant delay shared by all parts therefore does not show; the lanes show how each hit differs from the recent average.
+  - A hollow circle is a hit without a beat lock. It sits at the lane center because it has no timing.
+  - A ring around a dot marks a hit that the same band did not play at the same position one or two spans earlier. Rings appear from one span after a lock or re-alignment.
+  - A shaded band labelled **searching** marks the time without a beat lock.
+  - A dashed line marks where the beat grid was re-aligned without losing the lock, when the analyzer switched to a new tempo or shifted the beat position. The beat lens, swing, and jitter start over from there.
+- **Echo rows**: Cycles of as many beats as **Span (beats)** sets, stacked with the newest on top and separated by lines. The horizontal axis is **Beats**, and the vertical axis, **Cycles ago**, numbers each row. While the main lanes are shown, the rows start one cycle back, at 1, and the caption reads **Previous N-beat cycles**. With the main lanes hidden, the top row is the current cycle, at 0, the caption reads **Recent N-beat cycles**, and the top row carries the band labels when it has room. Because beats line up vertically, a pattern that repeats every cycle forms vertical columns, and a change breaks them. The echo rows show the band of each hit, **High** at the top of a row and **Low** at the bottom, but not its timing. Hollow circles, rings, shading, and dashed lines have the same meaning as in the main lanes.
+- **Beat lens**: Summarizes the timing of the last 32 beats since the current lock or re-alignment. The columns are positions within one beat, along the **Position in beat** axis: **1** (on the beat), **e**, **&**, and **a** for sixteenth notes, and **⅓** and **⅔** for triplets. Each band has its own row, labelled at the left edge.
+  - The vertical mark shows how early (left) or late (right) that band plays at that position on average. The scale at the top covers ±30 ms, with ticks at ±20 ms. The shaded bar around the mark shows the scatter (± one standard deviation). A more opaque mark means the position is played more often; a position needs at least four hits to appear.
+  - As values update, the marks and bar widths move smoothly toward the new values, slowing as they approach them.
+  - Offsets are measured relative to the ensemble as a whole, so if everything plays together, every mark sits at the center. The lens shows how the parts differ from one another.
+  - Offsets of 3 ms or more are labelled in ms. Smaller offsets are drawn without a label, because timing differences between bands below about 3 ms cannot be measured reliably.
+  - While the analyzer is not locked, the lens shows **waiting for a steady beat**.
+- **LOCKED** and the opacity of the tempo lines show how certain the analyzer is of the beat. They do not show how tightly the music is played; timing looseness is shown only by the dot heights, **jitter**, and the lens bars.
+- The **Reset** button clears the display and starts the analysis over, for example when you switch to a different track.
+- Stereo input is analyzed by averaging the first two channels; mono input is used directly.
+
+### Visual Display
+- Hover over the display, or touch and drag on it, to read the values at that point. In the lanes and echo rows, the readout shows how many beats ago the point is and the band and timing of the nearest hit (— for a hollow circle). In the tempogram strip, it shows the tempo and time under the cursor, **Salience** (how strongly the music repeats at that tempo; 100% means clear, strong repetition), and the **Adopted** tempo; in the beat lens, the offset and scatter of each band at that position.
+
+### Limitations
+
+- Accuracy may be lower on tracks with large tempo fluctuations, tracks without a rhythm section, and acoustic performances. Quiet music played in free tempo without percussion, ambient music, and sustained tones stay in **searching**. Some expressive recordings, such as solo piano or classical performances, never lock.
+- The analyzer can settle on a different beat level than a listener would choose, so the lamp and the click may run at twice, half, two-thirds, or one and a half times the tempo you feel. On classical music, music played with rubato, and some other music, it also takes longer to lock and jumps briefly to another level more often than on music with a steady beat. **×½**, **×2**, and **strongest** show likely alternative tempos. If the detected tempo or beat position seems wrong, try narrowing **Min BPM** and **Max BPM** around the expected tempo and listen again.
+- With sparse, clave-like rhythm patterns, the beat can lock on the off-beat.
+- When the tempo changes continuously, as in a gradual speed-up or free rubato, the beat follows with a short delay, so the click can run slightly early or late until the tempo settles.
+- On some steady tracks the beat position is occasionally re-aligned, shown by the dashed line, even though the music did not change.
+- In dense mixes and noisy recordings, the **Mid** and **High** lanes show more dots where no instrument actually struck. The **Low** lane misses some low piano notes.
+- There is no bar or meter detection: the display is organized by beats only and does not show where a bar starts.
+- The full analysis runs at 8, 11.025, 16, 22.05, 24, 32, 44.1, 48, 88.2, 96, 176.4, 192, 352.8, and 384 kHz. At any other sample rate, such as 64 kHz, the analyzer uses a simpler method: the beat and the hits are less accurate, and after the music stops, the beat stays on display for several seconds.
 
 ## Spectrogram
 
@@ -178,6 +332,9 @@ The graph scrolls from right to left at a steady speed, with marks every second.
   - Middle: Main instruments
   - Top: High frequencies
 - With **Log (HQ)**, nearby low-frequency tones appear as more clearly separated bands. The longer low-frequency measurement can take a little longer to settle or fade.
+
+### Visual Display
+- Hover over the display, or touch and drag on it, to read the values at that point.
 
 ### What You Can See
 - Melodies: Flowing lines of color
@@ -214,6 +371,9 @@ Creates a real-time visual display of your music's frequencies, from deep bass t
 - The thin marker above a bar shows its recent peak and falls smoothly.
 - With **Log (HQ)**, nearby bass tones can appear as separate peaks. Their longer low-frequency measurement can take a little longer to settle or fade.
 - Watch how different instruments create different patterns
+
+### Visual Display
+- Hover over the graph, or touch and drag on it, to read the values at that point.
 
 ### What You Can See
 - Bass Drops: Big movements on the left

@@ -57,7 +57,7 @@ for (const startupView of ['effects', 'library']) {
       ['/js/startup.js', { requested: deferred(), release: deferred() }],
       ['/js/locales/en.json5', { requested: deferred(), release: deferred() }],
       ...(startupView === 'library'
-        ? [['/effetune-library.css', { requested: deferred(), release: deferred() }]] : [])
+        ? [['/css/effetune-library.css', { requested: deferred(), release: deferred() }]] : [])
     ]);
     try {
       const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -142,9 +142,9 @@ for (const startupView of ['effects', 'library']) {
       gates.get('/js/locales/en.json5').release.resolve();
 
       if (startupView === 'library') {
-        await gates.get('/effetune-library.css').requested.promise;
+        await gates.get('/css/effetune-library.css').requested.promise;
         await assertPreparing(page);
-        gates.get('/effetune-library.css').release.resolve();
+        gates.get('/css/effetune-library.css').release.resolve();
         await page.waitForFunction(() => window.__libraryPageRequested === true);
         await assertPreparing(page);
         await page.evaluate(() => window.__releaseLibraryPage());

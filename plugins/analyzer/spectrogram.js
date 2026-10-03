@@ -6,20 +6,11 @@ const SPECTROGRAM_CELL_COUNT = 256;
 const SPECTROGRAM_HISTORY_WIDTH = 1024;
 const SPECTROGRAM_MIN_DISPLAY_FREQ = 20;
 const SPECTROGRAM_MAX_DISPLAY_FREQ = 40000;
-const SPECTROGRAM_DISPLAY_FREQ_RANGE =
-    SPECTROGRAM_MAX_DISPLAY_FREQ - SPECTROGRAM_MIN_DISPLAY_FREQ;
+// History rows are canonical log rows over the full 20 Hz-40 kHz range.
 const SPECTROGRAM_LOG_MIN_DISPLAY_FREQ = Math.log10(SPECTROGRAM_MIN_DISPLAY_FREQ);
 const SPECTROGRAM_LOG_MAX_DISPLAY_FREQ = Math.log10(SPECTROGRAM_MAX_DISPLAY_FREQ);
 const SPECTROGRAM_LOG_DISPLAY_FREQ_RANGE =
     SPECTROGRAM_LOG_MAX_DISPLAY_FREQ - SPECTROGRAM_LOG_MIN_DISPLAY_FREQ;
-const SPECTROGRAM_LINEAR_TO_CANONICAL_ROW = new Float64Array(SPECTROGRAM_CELL_COUNT);
-for (let row = 0; row < SPECTROGRAM_CELL_COUNT; row++) {
-    const position = row / (SPECTROGRAM_CELL_COUNT - 1);
-    const frequency = SPECTROGRAM_MAX_DISPLAY_FREQ - position * SPECTROGRAM_DISPLAY_FREQ_RANGE;
-    SPECTROGRAM_LINEAR_TO_CANONICAL_ROW[row] = (SPECTROGRAM_CELL_COUNT - 1) *
-        (SPECTROGRAM_LOG_MAX_DISPLAY_FREQ - Math.log10(frequency)) /
-        SPECTROGRAM_LOG_DISPLAY_FREQ_RANGE;
-}
 const SPECTROGRAM_COLOR_STOPS = [
     { pos: 0.000, r: 0,   g: 0,   b: 0 },
     { pos: 0.166, r: 0,   g: 0,   b: 255 },
@@ -219,11 +210,16 @@ class SpectrogramPlugin extends PluginBase {
         return result;
     }
 
+    // A host such as the Visualizer may lower the top of the frequency axis.
+    get maxDisplayFrequency() {
+        return this.displayOptions?.maxFrequency ?? SPECTROGRAM_MAX_DISPLAY_FREQ;
+    }
+
     // Convert frequency to the selected display y coordinate (0-255).
     freqToY(freq) {
         const minDisplayFreq = SPECTROGRAM_MIN_DISPLAY_FREQ;
         const nyquistFreq = this.sampleRate / 2;
-        const maxDisplayFreq = SPECTROGRAM_MAX_DISPLAY_FREQ;
+        const maxDisplayFreq = this.maxDisplayFrequency;
 
         if (this.sampleRate <= 0 || nyquistFreq <= minDisplayFreq || freq < minDisplayFreq) {
              return 255; // Map to bottom for frequencies below min or invalid sample rate
@@ -237,10 +233,10 @@ class SpectrogramPlugin extends PluginBase {
 
         let normalized;
         if (this.sc === 'linear') {
-            normalized = (freqClamped - minDisplayFreq) / SPECTROGRAM_DISPLAY_FREQ_RANGE;
+            normalized = (freqClamped - minDisplayFreq) / (maxDisplayFreq - minDisplayFreq);
         } else {
             normalized = (Math.log10(freqClamped) - SPECTROGRAM_LOG_MIN_DISPLAY_FREQ) /
-                SPECTROGRAM_LOG_DISPLAY_FREQ_RANGE;
+                (Math.log10(maxDisplayFreq) - SPECTROGRAM_LOG_MIN_DISPLAY_FREQ);
         }
         const y = 255 - Math.round(255 * normalized);
         return y < 0 ? 0 : (y > 255 ? 255 : y);
@@ -248,14 +244,27 @@ class SpectrogramPlugin extends PluginBase {
 
     displayRowToFrequency(row) {
         const position = 1 - row / (SPECTROGRAM_CELL_COUNT - 1);
+        const max = this.maxDisplayFrequency;
         return this.sc === 'linear'
-            ? SPECTROGRAM_MIN_DISPLAY_FREQ + position * SPECTROGRAM_DISPLAY_FREQ_RANGE
-            : 10 ** (SPECTROGRAM_LOG_MIN_DISPLAY_FREQ + position * SPECTROGRAM_LOG_DISPLAY_FREQ_RANGE);
+            ? SPECTROGRAM_MIN_DISPLAY_FREQ + position * (max - SPECTROGRAM_MIN_DISPLAY_FREQ)
+            : 10 ** (SPECTROGRAM_LOG_MIN_DISPLAY_FREQ +
+                position * (Math.log10(max) - SPECTROGRAM_LOG_MIN_DISPLAY_FREQ));
     }
 
     displayRowToCanonicalRow(row) {
-        if (this.sc !== 'linear') return row;
-        return SPECTROGRAM_LINEAR_TO_CANONICAL_ROW[row];
+        const max = this.maxDisplayFrequency;
+        if (this.sc !== 'linear' && max === SPECTROGRAM_MAX_DISPLAY_FREQ) return row;
+        if (this.canonicalRowMapScale !== this.sc || this.canonicalRowMapMax !== max) {
+            this.canonicalRowMapScale = this.sc;
+            this.canonicalRowMapMax = max;
+            this.canonicalRowMap ??= new Float64Array(SPECTROGRAM_CELL_COUNT);
+            for (let i = 0; i < SPECTROGRAM_CELL_COUNT; i++) {
+                this.canonicalRowMap[i] = (SPECTROGRAM_CELL_COUNT - 1) *
+                    (SPECTROGRAM_LOG_MAX_DISPLAY_FREQ - Math.log10(this.displayRowToFrequency(i))) /
+                    SPECTROGRAM_LOG_DISPLAY_FREQ_RANGE;
+            }
+        }
+        return this.canonicalRowMap[row];
     }
 
     sampleCanonicalRow(values, sourceRow, column = 0, stride = 1) {
@@ -309,6 +318,7 @@ class SpectrogramPlugin extends PluginBase {
         if (visible === this.kb) return;
         this.kb = visible;
         this.updateParameters();
+        this._graphReadout?.clear();
         this.drawGraph();
     }
 
@@ -317,6 +327,7 @@ class SpectrogramPlugin extends PluginBase {
         if (scale === this.sc) return;
         if (scale === 'log-hq' || this.sc === 'log-hq') this.resetHqDisplay();
         this.sc = scale;
+        this._graphReadout?.clear();
         this.repaintSpectrogramHistory();
         this.updateParameters();
     }
@@ -721,7 +732,10 @@ class SpectrogramPlugin extends PluginBase {
         const container = document.createElement('div');
         container.className = 'plugin-parameter-ui';
 
-        container.appendChild(this.createParameterControl(
+        // Two columns on desktop, one on mobile (css/effetune.css and css/effetune-mobile.css).
+        const parameters = document.createElement('div');
+        parameters.className = 'analyzer-parameters';
+        parameters.appendChild(this.createParameterControl(
             'DB Range', -144, -48, 1, this.dr, (v) => this.setDBRange(v), 'dB', 'dr'
         ));
 
@@ -757,9 +771,9 @@ class SpectrogramPlugin extends PluginBase {
         pointsValue.addEventListener('change', pointsValueHandler);
         this.boundEventListeners.set(pointsValue, pointsValueHandler);
         pointsRow.appendChild(pointsLabel); pointsRow.appendChild(pointsSlider); pointsRow.appendChild(pointsValue);
-        container.appendChild(pointsRow);
+        parameters.appendChild(pointsRow);
 
-        container.appendChild(this.createRadioGroup(
+        parameters.appendChild(this.createRadioGroup(
             'Color',
             [
                 { value: 'Normal', label: 'Normal' },
@@ -769,7 +783,7 @@ class SpectrogramPlugin extends PluginBase {
             value => this.setColor(value), 'cl'
         ));
 
-        container.appendChild(this.createRadioGroup(
+        parameters.appendChild(this.createRadioGroup(
             'Frequency Scale',
             [
                 { value: 'log', label: 'Log' },
@@ -779,9 +793,10 @@ class SpectrogramPlugin extends PluginBase {
             this.sc,
             value => this.setFrequencyScale(value), 'sc'
         ));
-        container.appendChild(this.createCheckboxControl(
+        parameters.appendChild(this.createCheckboxControl(
             'Keyboard', this.kb, value => this.setKeyboardVisible(value), 'kb'
         ));
+        container.appendChild(parameters);
 
         const { container: graphContainer, canvas, dispose } = this.createResponsiveGraph({
             maxWidth: 1024,
@@ -819,6 +834,24 @@ class SpectrogramPlugin extends PluginBase {
             pointsValue.value = 1 << this.pt;
         });
 
+        this._graphReadout = window.GraphReadout?.attach({
+            mount: graphContainer,
+            surface: this.canvas,
+            // The spectrogram area, or the keyboard gutter while the pointer is over it.
+            plot: point => {
+                const frame = this._readoutFrame;
+                if (!frame?.valid) return null;
+                const onKeys = point.x >= frame.plotWidth;
+                return {
+                    left: onKeys ? frame.plotWidth : 0,
+                    top: 0,
+                    width: onKeys ? frame.gutter : frame.plotWidth,
+                    height: frame.height
+                };
+            },
+            read: (x, y) => this._readSpectrogram(x, y),
+            crosshair: 'xy'
+        });
         return container;
     }
 
@@ -1102,7 +1135,7 @@ class SpectrogramPlugin extends PluginBase {
 
     getKeyboardGeometry(length) {
         const minMidi = 69 + 12 * Math.log2(SPECTROGRAM_MIN_DISPLAY_FREQ / 440);
-        const maxMidi = 69 + 12 * Math.log2(SPECTROGRAM_MAX_DISPLAY_FREQ / 440);
+        const maxMidi = 69 + 12 * Math.log2(this.maxDisplayFrequency / 440);
         const blackClasses = [1, 3, 6, 8, 10];
         const isBlack = midi => blackClasses.includes((midi % 12 + 12) % 12);
         const position = midi => {
@@ -1128,17 +1161,16 @@ class SpectrogramPlugin extends PluginBase {
         return keys;
     }
 
-    drawKeyboard(ctx, width, height, gutter, dpr, labelFontSize) {
+    drawKeyboard(ctx, width, height, gutter, blackDepth, dpr, labelFontSize) {
         const background = ((this.displayOptions?.themePalette ?? window.ThemePalette)?.get('graph-bg-deep') ?? '')
             .match(/[\d.]+/g)?.slice(0, 3).map(Number);
         if (!background || background.length !== 3) return;
         const light = background.every(channel => channel > 127);
-        const white = light ? 255 : 221;
+        const white = light ? 255 : 238;
         const whiteColor = 'rgb(' + white + ', ' + white + ', ' + white + ')'; // theme-allow: Theme-dependent keyboard color.
-        const black = 34;
+        const black = 17;
         const keys = this.getKeyboardGeometry(height);
         const edge = width - gutter;
-        const blackDepth = gutter / 1.6;
         ctx.save();
         ctx.beginPath();
         ctx.rect(edge, 0, gutter, height);
@@ -1155,11 +1187,12 @@ class SpectrogramPlugin extends PluginBase {
             ctx.lineTo(width, key.whiteStart);
             ctx.stroke();
         }
-        ctx.fillStyle = 'rgb(' + black + ', ' + black + ', ' + black + ')'; // theme-allow: Fixed self-painted black key color.
-        for (const key of keys) {
-            if (!key.black) continue;
-            ctx.fillRect(edge, key.start, blackDepth, key.end - key.start);
-        }
+        const blackKeys = keys.filter(key => key.black);
+        window.FrequencyAxis.shadeKeyboard(ctx, { along: 'y', edge, length: height, gutter, blackDepth, dpr },
+            blackKeys.map(key => [key.start, key.end]), () => {
+                ctx.fillStyle = 'rgb(' + black + ', ' + black + ', ' + black + ')'; // theme-allow: Fixed self-painted black key color.
+                for (const key of blackKeys) ctx.fillRect(edge, key.start, blackDepth, key.end - key.start);
+            });
         ctx.beginPath();
         ctx.moveTo(edge, 0);
         ctx.lineTo(edge, height);
@@ -1204,7 +1237,12 @@ class SpectrogramPlugin extends PluginBase {
 
     drawGraph(now = performance.now()) {
         if (this.displayOptions?.deferDraw) return;
-        if (!this.canvasCtx || !this.imageDataCache || !this.tempCtx || !this.tempCanvas) return;
+        const frame = (this._readoutFrame ??= {});
+        frame.valid = false;
+        if (!this.canvasCtx || !this.imageDataCache || !this.tempCtx || !this.tempCanvas) {
+            this._graphReadout?.refresh();
+            return;
+        }
 
         if (this.cl !== 'Heatmap' && !this.displayOptions?.colorLut) {
             const palette = this.displayOptions?.themePalette ?? window.ThemePalette;
@@ -1224,8 +1262,11 @@ class SpectrogramPlugin extends PluginBase {
         const dpr = this.graphDpr || 1;
         const isNarrow = this.graphCssWidth < 500;
         const frequencyLabelFontSize = (isNarrow ? 11 : 12) * dpr;
-        const keyboardDepth = 28 * (this.displayOptions?.preserveKeyboardAspect ? targetHeight / 480 : dpr);
-        const keyboardGutter = this.kb && targetWidth > keyboardDepth ? keyboardDepth : 0;
+        // Keys keep piano proportions at the log-axis semitone width, also on the linear axis.
+        const { gutter: keyboardGutter, blackDepth } = this.kb ? window.FrequencyAxis.keyboardDepths(
+            targetHeight / Math.log2(this.maxDisplayFrequency / SPECTROGRAM_MIN_DISPLAY_FREQ), targetWidth,
+            this.displayOptions?.keyboardLength
+        ) : { gutter: 0, blackDepth: 0 };
         const plotWidth = targetWidth - keyboardGutter;
         
         const background = this.spectrogramColorLut;
@@ -1244,6 +1285,11 @@ class SpectrogramPlugin extends PluginBase {
         this.scrollAnchorPending = false;
         const period = this.spectrogramColumnPeriod;
         const pixelsPerSecond = period > 0 ? plotWidth / (SPECTROGRAM_HISTORY_WIDTH * period) : 0;
+        Object.assign(frame, {
+            valid: true, plotWidth, height: targetHeight, gutter: keyboardGutter, blackDepth, period, pixelsPerSecond,
+            displayTime: displayTime !== null && period > 0 ? displayTime : null,
+            latestWidth: (period + displayTime - this.prevTime) * pixelsPerSecond
+        });
         const drawHistory = ctx => {
             if (displayTime !== null && period > 0) {
                 if (!this.dspSpectrogramActive) this.tempCtx.putImageData(this.imageDataCache, 0, 0);
@@ -1303,14 +1349,17 @@ class SpectrogramPlugin extends PluginBase {
             // --- Dynamic Frequency Grid for Spectrogram Y-Axis ---
             const minDisplayFreq = SPECTROGRAM_MIN_DISPLAY_FREQ;
             const nyquistFreq = this.sampleRate / 2;
-            const maxDisplayFreq = SPECTROGRAM_MAX_DISPLAY_FREQ;
+            const maxDisplayFreq = this.maxDisplayFrequency;
 
             if (this.sampleRate > 0 && nyquistFreq > minDisplayFreq) {
                 // Base frequencies for labels, filter/adjust based on dynamic range
+                // A linear axis topping out at 10 kHz or below gets a 1 kHz grid.
                 let baseGridFreqs = this.sc === 'linear'
-                    ? (isNarrow
-                        ? [20, 10000, 20000, 30000, 40000]
-                        : [20, 5000, 10000, 15000, 20000, 25000, 30000, 35000, 40000])
+                    ? (maxDisplayFreq <= 10000
+                        ? [20, ...Array.from({ length: Math.floor(maxDisplayFreq / 1000) }, (_, index) => (index + 1) * 1000)]
+                        : isNarrow
+                            ? [20, 10000, 20000, 30000, 40000]
+                            : [20, 5000, 10000, 15000, 20000, 25000, 30000, 35000, 40000])
                     : (isNarrow
                         ? [20, 100, 1000, 10000, 20000]
                         : [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]);
@@ -1387,9 +1436,61 @@ class SpectrogramPlugin extends PluginBase {
         if (keyboardGutter) {
             ctx.restore();
             this.drawKeyboard(
-                ctx, targetWidth, targetHeight, keyboardGutter, dpr, frequencyLabelFontSize
+                ctx, targetWidth, targetHeight, keyboardGutter, blackDepth, dpr, frequencyLabelFontSize
             );
         }
+        this._graphReadout?.refresh();
+    }
+
+    // History column drawn at canvas x, or -1 where no analysis column is shown.
+    _readoutColumn(x) {
+        const frame = this._readoutFrame;
+        const count = this.spectrogramColumnCount;
+        if (frame.displayTime === null || count === 0) return -1;
+        const dsp = this.dspSpectrogramActive;
+        const width = SPECTROGRAM_HISTORY_WIDTH;
+        if (x >= frame.plotWidth - frame.latestWidth) {
+            return dsp ? (this.spectrogramWriteColumn + width - 1) % width : width - 1;
+        }
+        const time = frame.displayTime + (x - frame.plotWidth) / frame.pixelsPerSecond;
+        const start = dsp ? (this.spectrogramWriteColumn - count + width) % width : width - count;
+        for (let index = 0; index < count - 1; index++) {
+            const column = (start + index) % width;
+            const columnTime = this.spectrogramColumnTimes[column];
+            if (time >= columnTime - frame.period && time < columnTime) return column;
+        }
+        return -1;
+    }
+
+    _readSpectrogram(x, y) {
+        const frame = this._readoutFrame;
+        if (!frame?.valid) return null;
+        const { format } = window.GraphReadout;
+        const { plotWidth, height } = frame;
+        if (x >= plotWidth) {
+            const key = window.FrequencyAxis?.hitKey(this.getKeyboardGeometry(height), y, x - plotWidth,
+                frame.gutter, frame.blackDepth);
+            return key ? { cursor: format.note(440 * 2 ** ((key.midi - 69) / 12)), rows: [], crosshair: 'none' } : null;
+        }
+        const frequency = format.frequency(this.displayRowToFrequency(y / height * (SPECTROGRAM_CELL_COUNT - 1)));
+        const cursor = frame.displayTime === null ? frequency
+            : `${frequency} · ${format.time((x - plotWidth) / frame.pixelsPerSecond * 1000)}`;
+        const row = { label: 'Level', value: format.db(NaN) };
+        const column = this._readoutColumn(x);
+        if (column >= 0) {
+            const nominalRow = Math.floor(y / height * SPECTROGRAM_CELL_COUNT);
+            const displayRow = nominalRow > SPECTROGRAM_CELL_COUNT - 1 ? SPECTROGRAM_CELL_COUNT - 1 : nominalRow;
+            const sourceRow = this.displayRowToCanonicalRow(displayRow);
+            // DSP history stores display intensities; the legacy path stores dB.
+            row.value = format.db(this.dspSpectrogramActive
+                ? this.dr * (1 - Math.round(this.sampleCanonicalRow(this.spectrogramIntensityBuffer,
+                    sourceRow, column, SPECTROGRAM_HISTORY_WIDTH)) / 255)
+                : this.sampleCanonicalRow(this.spectrogramBuffer, sourceRow, column, SPECTROGRAM_HISTORY_WIDTH));
+            const pixels = this.imageDataCache.data;
+            const offset = (displayRow * SPECTROGRAM_HISTORY_WIDTH + column) * 4;
+            row.color = `rgb(${pixels[offset]}, ${pixels[offset + 1]}, ${pixels[offset + 2]})`; // theme-allow: Color of the drawn spectrogram cell.
+        }
+        return { cursor, rows: [row] };
     }
 }
 

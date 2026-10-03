@@ -4,8 +4,8 @@ import test from 'node:test';
 import { chromium } from 'playwright';
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
-const baseCss = read('../../effetune-theme.css') +
-  read('../../effetune.css').replace('@import url("effetune-theme.css");', '');
+const baseCss = read('../../css/effetune-theme.css') +
+  read('../../css/effetune.css').replace('@import url("effetune-theme.css");', '');
 const extensionCss = read('../../extension/editor.css');
 const collapseManagerSource = read('../../js/ui/plugin-list/collapse-manager.js')
   .replace('export class CollapseManager', 'class CollapseManager');

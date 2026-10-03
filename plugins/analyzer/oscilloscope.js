@@ -21,7 +21,8 @@ class OscilloscopePlugin extends PluginBase {
       this.displayTime = 0.01; // default 10 ms = 0.01 sec
   
       // Trigger parameters:
-      // Trigger Mode (tm): "Auto" (continuous sweep with forced update) or "Normal" (freeze display if no trigger)
+      // Trigger Mode (tm): "Auto" (continuous sweep with forced update), "Normal" (freeze display if no trigger)
+      // or "Off" (free-running display of the latest Display Time samples)
       this.triggerMode = 'Auto';
       // Trigger Level (tl): linear amplitude value (expected raw signal in [-1,1])
       this.triggerLevel = 0.0;
@@ -228,9 +229,14 @@ class OscilloscopePlugin extends PluginBase {
   
       const parametersGrid = document.createElement('div');
       parametersGrid.className = 'parameters-grid';
+      // Each column stacks its own rows, so a wrapped radio row grows only its column.
+      const leftColumn = document.createElement('div');
+      const rightColumn = document.createElement('div');
+      parametersGrid.appendChild(leftColumn);
+      parametersGrid.appendChild(rightColumn);
   
       // --- Display Time Control (ms) ---
-      parametersGrid.appendChild(this.createParameterControl(
+      leftColumn.appendChild(this.createParameterControl(
         'Display Time', 1, 100, 1,
         (this.displayTime * 1000).toFixed(0),
         (value) => {
@@ -242,14 +248,14 @@ class OscilloscopePlugin extends PluginBase {
         'ms', 'displayTime', (value) => value * 1000, true
       ));
   
-      // --- Trigger Mode Control (Auto/Normal) ---
+      // --- Trigger Mode Control (Auto/Normal/Off) ---
       const tmRow = document.createElement('div');
       tmRow.className = 'parameter-row';
   
       const tmLabel = document.createElement('label');
       tmLabel.textContent = 'Trigger Mode:';
 
-      const modes = ['Auto', 'Normal'];
+      const modes = ['Auto', 'Normal', 'Off'];
       const modeRadioInputs = [];
       const modeRadios = modes.map(mode => {
         const label = document.createElement('label');
@@ -279,12 +285,15 @@ class OscilloscopePlugin extends PluginBase {
         modeRadioInputs.push({ radio, mode });
         return label;
       });
+      const tmGroup = document.createElement('div');
+      tmGroup.className = 'radio-group';
+      modeRadios.forEach(r => tmGroup.appendChild(r));
       tmRow.appendChild(tmLabel);
-      modeRadios.forEach(r => tmRow.appendChild(r));
-      parametersGrid.appendChild(tmRow);
+      tmRow.appendChild(tmGroup);
+      rightColumn.appendChild(tmRow);
   
       // --- Trigger Level Control ---
-      parametersGrid.appendChild(this.createParameterControl(
+      leftColumn.appendChild(this.createParameterControl(
         'Trigger Level', -1.0, 1.0, 0.01,
         this.triggerLevel,
         (value) => {
@@ -331,12 +340,15 @@ class OscilloscopePlugin extends PluginBase {
         edgeRadioInputs.push({ radio, edge });
         return label;
       });
+      const teGroup = document.createElement('div');
+      teGroup.className = 'radio-group';
+      edgeRadios.forEach(r => teGroup.appendChild(r));
       teRow.appendChild(teLabel);
-      edgeRadios.forEach(r => teRow.appendChild(r));
-      parametersGrid.appendChild(teRow);
+      teRow.appendChild(teGroup);
+      rightColumn.appendChild(teRow);
   
       // --- Holdoff Control (ms) ---
-      parametersGrid.appendChild(this.createParameterControl(
+      leftColumn.appendChild(this.createParameterControl(
         'Holdoff', 0.1, 10, 0.1,
         (this.holdoff * 1000).toFixed(1),
         (value) => {
@@ -348,7 +360,7 @@ class OscilloscopePlugin extends PluginBase {
       ));
   
       // --- Display Level Control (dB) ---
-      parametersGrid.appendChild(this.createParameterControl(
+      rightColumn.appendChild(this.createParameterControl(
         'Display Level', -96, 0, 1,
         this.displayLevel,
         (value) => {
@@ -359,7 +371,7 @@ class OscilloscopePlugin extends PluginBase {
       ));
 
       // --- Vertical Offset Control ---
-      parametersGrid.appendChild(this.createParameterControl(
+      leftColumn.appendChild(this.createParameterControl(
         'Vertical Offset', -1.0, 1.0, 0.01,
         this.verticalOffset,
         (value) => {
@@ -408,6 +420,16 @@ class OscilloscopePlugin extends PluginBase {
         }
       });
 
+      this._graphReadout = window.GraphReadout?.attach({
+        mount: graphContainer,
+        surface: this.canvas,
+        plot: () => {
+          const frame = this._readoutFrame;
+          return frame && { left: frame.left, top: 0, width: frame.width, height: frame.height };
+        },
+        read: x => this._readWaveform(x)
+      });
+
       return container;
     }
   
@@ -425,7 +447,7 @@ class OscilloscopePlugin extends PluginBase {
     }
   
     setTriggerMode(value) {
-      if (['Auto', 'Normal'].includes(value)) {
+      if (['Auto', 'Normal', 'Off'].includes(value)) {
         this.triggerMode = value;
         // Clear frozen snapshot when mode changes.
         this.frozenDisplayBuffer = null;
@@ -745,6 +767,22 @@ class OscilloscopePlugin extends PluginBase {
       this.waveformBuffer.set(buffer);
       const newTriggerIndex = message.measurements.triggerIndex;
       const currentPos = message.measurements.currentPosition;
+
+      // Free-running mode shows the latest Display Time samples without waiting for a trigger.
+      if (this.triggerMode === 'Off') {
+        const displaySamples = Math.max(1, Math.floor(this.sampleRate * this.displayTime));
+        const start = currentPos - displaySamples;
+        const latest = new Float32Array(displaySamples);
+        if (start >= 0) {
+          latest.set(buffer.subarray(start, currentPos));
+        } else {
+          latest.set(buffer.subarray(bufferLength + start));
+          latest.set(buffer.subarray(0, currentPos), -start);
+        }
+        this.frozenDisplayBuffer = latest;
+        this.scopeSnapshot = null;
+        return audioBuffer;
+      }
   
       // Only start a new accumulation if not already accumulating.
       if (!this.accumulating && (this.lastProcessedTriggerIndex === null || this.lastProcessedTriggerIndex !== newTriggerIndex)) {
@@ -973,14 +1011,14 @@ class OscilloscopePlugin extends PluginBase {
       // Draw the waveform if a frozen snapshot is available.
       // ---------------------------
       const displayBuffer = this.scopeSnapshot?.values || this.frozenDisplayBuffer;
+      const sampleIndices = this.scopeSnapshot?.sampleIndices;
+      const sampleCount = this.scopeSnapshot?.captureSampleCount || displayBuffer?.length;
+      const denominator = sampleCount > 1 ? sampleCount - 1 : 1;
       if (displayBuffer) {
-        const sampleIndices = this.scopeSnapshot?.sampleIndices;
-        const sampleCount = this.scopeSnapshot?.captureSampleCount || displayBuffer.length;
         const drawTrace = target => {
           target.strokeStyle = options?.traceStyle?.(target) ?? theme('graph-trace');
           target.lineWidth = 2 * dpr;
           target.beginPath();
-          const denominator = sampleCount > 1 ? sampleCount - 1 : 1;
           for (let i = 0; i < displayBuffer.length; i++) {
             const sampleIndex = sampleIndices ? sampleIndices[i] : i;
             const x = leftMargin + (sampleIndex / denominator) * (width - leftMargin);
@@ -997,6 +1035,37 @@ class OscilloscopePlugin extends PluginBase {
         if (options?.drawSignal) options.drawSignal(ctx, drawTrace);
         else drawTrace(ctx);
       }
+
+      // Keep the drawn mapping for the cursor readout.
+      const frame = (this._readoutFrame ??= {});
+      frame.left = leftMargin;
+      frame.width = width - leftMargin;
+      frame.height = height;
+      frame.centerY = centerY;
+      frame.factor = factor;
+      frame.displayTimeMs = this.displayTime * 1000;
+      frame.values = displayBuffer;
+      frame.sampleIndices = sampleIndices;
+      frame.denominator = denominator;
+      this._graphReadout?.refresh();
+    }
+
+    // Reads the drawn waveform at canvas pixel x, interpolating between plotted points.
+    _readWaveform(x) {
+      const frame = this._readoutFrame;
+      if (!frame || frame.width <= 0) return null;
+      const { format, seriesValueAt, columnValueAt } = window.GraphReadout;
+      const { left, width, values, sampleIndices, denominator } = frame;
+      const position = (x - left) / width * denominator;
+      const row = { label: 'Amplitude', color: 'var(--et-graph-trace)', value: format.number(NaN) };
+      const sample = !values ? null
+        : sampleIndices ? seriesValueAt(sampleIndices, values, position)
+        : columnValueAt(values, position);
+      if (sample !== null) {
+        row.value = format.number(sample, 3);
+        row.y = frame.centerY - sample * frame.factor * frame.height / 2;
+      }
+      return { cursor: format.time((x - left) / width * frame.displayTimeMs), rows: [row] };
     }
 
     // ---------------------------

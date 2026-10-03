@@ -446,7 +446,7 @@ jobs:
 
   macos-arm:
     name: macOS Apple Silicon release candidates
-    needs: windows
+    needs: linux
     runs-on: macos-15
     permissions:
       contents: read
@@ -566,7 +566,7 @@ jobs:
 
   macos-intel:
     name: macOS Intel release candidates
-    needs: macos-arm
+    needs: linux
     runs-on: macos-15-intel
     permissions:
       contents: read
@@ -686,7 +686,7 @@ jobs:
 
   acceptance:
     name: Candidate wrapper acceptance
-    needs: macos-intel
+    needs: [windows, macos-arm, macos-intel]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

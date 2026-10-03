@@ -3,15 +3,9 @@ const path = require('path');
 const crypto = require('crypto');
 
 const defaultRoot = path.resolve(__dirname, '..');
-const includeRoots = ['js', 'plugins', 'images', 'presets'];
+const includeRoots = ['css', 'js', 'plugins', 'images', 'presets'];
 const explicit = [
   'effetune.html',
-  'effetune.css',
-  'effetune-theme.css',
-  'effetune-mobile.css',
-  'effetune-library.css',
-  'pipeline-analyzer.css',
-  'user-data-backup.css',
   'features/effetune-benchmark.js',
   'features/effetune-benchmark-score.js',
   'features/benchmark-score-reference.js',
@@ -19,6 +13,13 @@ const explicit = [
   'features/measurement/measurement-model.js',
   'features/measurement/audio-utils/channel-selection.js',
   'features/measurement/audio-utils/output-routing.js',
+  'features/measurement/peq-calculator/design-utils.js',
+  'features/measurement/peq-calculator/filter-response.js',
+  'features/measurement/peq-calculator/optimization.js',
+  'features/measurement/peq-calculator/peak-detection.js',
+  'features/measurement/peq-calculator/peq-calculator.js',
+  'features/measurement/peq-calculator/smoothing.js',
+  'features/measurement/ui/peq-clipboard.js',
   'manifest.json',
   'package.json',
   'sw.js',
@@ -27,6 +28,7 @@ const explicit = [
 const allowedExtensions = new Set(['.js', '.mjs', '.css', '.json', '.json5', '.png', '.ico', '.jpg', '.jpeg', '.svg', '.txt', '.wasm', '.effetune_preset']);
 const binaryExtensions = new Set(['.ico', '.jpeg', '.jpg', '.png', '.wasm']);
 const excludedPathPatterns = [
+  /^images\/_vizaudio_tmp\//,
   /^images\/screenshot(?:-[^/]+)?\.png$/,
   /^images\/ogp\.jpg$/,
   /^images\/video_thumbnail\.jpg$/,

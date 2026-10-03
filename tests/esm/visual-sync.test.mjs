@@ -14,6 +14,8 @@ test('visual sync capture ages follow FFT, staged slot, HQ and pitch window form
   }
   assert.equal(rules.NoteSpectrogramPlugin.generationFrames({}, 48000, 'wasm'), 8192 + 960);
   assert.equal(rules.PitchMeterPlugin.generationFrames({ rf: 440, mn: 69 }, 48000, 'wasm'), 360 + 480);
+  assert.equal(rules.RhythmAnalyzerPlugin.generationFrames({}, 48000, 'wasm'), 1024 / 2 + 2 * 128);
+  assert.equal(rules.RhythmAnalyzerPlugin.generationFrames({}, 96000, 'wasm'), 2048 / 2 + 2 * 256);
   assert.equal(rules.OscilloscopePlugin.generationFrames({ dt: 0.01 }, 48000, 'wasm'), 240);
   assert.equal(rules.StereoMeterPlugin.generationFrames({ wt: 0.1 }, 48000, 'wasm'), 2400);
   assert.equal(rules.spectrumOverlay.generationFrames(), 2048);
@@ -63,6 +65,14 @@ test('Phase Select EQ sync follows the input window and staged completion before
   assert.ok(Math.abs(due - (1000 + 2048 / 48)) < 1e-10);
 });
 
+
+test('Analog Meter aligns only its windowed RMS and Loudness readings', () => {
+  const age = params => rules.AnalogMeterPlugin.generationFrames(params, 48000, 'wasm');
+  for (const md of ['VU', 'PPM', 'Sample Peak', 'True Peak']) assert.equal(age({ md, it: 0.3 }), 0);
+  assert.equal(age({ md: 'RMS', it: 0.3 }), 7200);
+  assert.equal(age({ md: 'Loudness', ln: 0 }), 9600);
+  assert.equal(age({ md: 'Loudness', ln: 1 }), 72000);
+});
 
 test('Chroma Spiral automatic HQ capture age matches fixed sample-rate contracts', () => {
   for (const [rate, age] of [[44100, 20528], [48000, 20528], [88200, 41008], [96000, 41008], [192000, 41008]]) {

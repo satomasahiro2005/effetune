@@ -66,7 +66,7 @@ function assertSquareIconButton(rule, selector) {
 }
 
 test('mobile controls use 40px border-box height and 80px field width', () => {
-  const css = readCss('../../effetune-mobile.css');
+  const css = readCss('../../css/effetune-mobile.css');
 
   assert.match(getRule(css, ':root'), /--et-mobile-control-height:\s*40px;/);
   assert.match(getRule(css, ':root'), /--et-mobile-field-min-width:\s*80px;/);
@@ -143,7 +143,7 @@ test('mobile controls use 40px border-box height and 80px field width', () => {
 });
 
 test('mobile effect list keeps effect items at the fixed minimum column width', () => {
-  const css = readCss('../../effetune-mobile.css');
+  const css = readCss('../../css/effetune-mobile.css');
   const rule = getLastRule(css, 'body.layout-mobile .plugin-category-items');
 
   assert.match(rule, /display:\s*grid\s*!important;/);
@@ -168,7 +168,7 @@ test('Multiband Transient keeps all three graphs on one desktop row', () => {
 });
 
 test('mobile player keeps scrolling inside the player pane', () => {
-  const css = readCss('../../effetune-mobile.css');
+  const css = readCss('../../css/effetune-mobile.css');
   const bodyRule = getRule(css, 'body.layout-mobile.view-player {');
   const playerViewRule = getLastRule(css, 'body.layout-mobile .mobile-player-view');
   const audioPlayerRule = getRule(css, 'body.layout-mobile .audio-player');
@@ -186,7 +186,7 @@ test('mobile player keeps scrolling inside the player pane', () => {
 });
 
 test('mobile player places the queue list below the primary play pause control', () => {
-  const css = readCss('../../effetune-mobile.css');
+  const css = readCss('../../css/effetune-mobile.css');
   const audioPlayerRule = getRule(css, 'body.layout-mobile .audio-player');
   const controlsRule = getRule(css, 'body.layout-mobile .player-controls');
   const controlsItemRule = getRule(css, 'body.layout-mobile .player-controls > *');
@@ -319,7 +319,7 @@ test('mobile player places the queue list below the primary play pause control',
 });
 
 test('mobile motion tokens honor reduced motion preferences', () => {
-  const css = readCss('../../effetune-mobile.css');
+  const css = readCss('../../css/effetune-mobile.css');
 
   assert.match(
     css,
@@ -334,7 +334,7 @@ test('mobile motion tokens honor reduced motion preferences', () => {
 });
 
 test('mobile overflow menu accepts input only while open', () => {
-  const css = readCss('../../effetune-mobile.css');
+  const css = readCss('../../css/effetune-mobile.css');
 
   assert.match(
     css,
@@ -349,7 +349,7 @@ test('mobile overflow menu accepts input only while open', () => {
 });
 
 test('mobile effect list uses directional entrance and exit transitions', () => {
-  const css = readCss('../../effetune-mobile.css');
+  const css = readCss('../../css/effetune-mobile.css');
 
   assert.match(
     css,
@@ -369,7 +369,7 @@ test('mobile effect list uses directional entrance and exit transitions', () => 
 });
 
 test('mobile dialogs use sheet entrance and exit animations', () => {
-  const css = readCss('../../effetune-mobile.css');
+  const css = readCss('../../css/effetune-mobile.css');
 
   assert.match(css, /@keyframes\s+et-sheet-in\s*\{/);
   assert.match(css, /@keyframes\s+et-sheet-out\s*\{/);
@@ -381,7 +381,7 @@ test('mobile dialogs use sheet entrance and exit animations', () => {
 });
 
 test('mobile overflow menu stays within the safe viewport and scrolls long menus', () => {
-  const css = readCss('../../effetune-mobile.css');
+  const css = readCss('../../css/effetune-mobile.css');
   const menuRule = css.match(/body\.layout-mobile \.mobile-overflow-menu\s*\{([^{}]*)\}/)?.[1];
 
   assert.ok(menuRule, 'mobile overflow menu should have a base rule');

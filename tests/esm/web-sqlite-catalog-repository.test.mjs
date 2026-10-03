@@ -16,6 +16,8 @@ import { metadataParseEligibility } from '../../js/library/scan/metadata-parse-s
 import { createConsoleHarness, withGlobals } from '../helpers/global-test-utils.mjs';
 import { removeSqliteTestDirectory } from '../helpers/sqlite-test-utils.mjs';
 
+const catalogRuntimeCoreSource = fs.readFileSync(new URL('../../js/library/repository/catalog-runtime-core.js', import.meta.url), 'utf8');
+
 test('Web SQLite repository maps OPFS, full, busy, and corruption failures to stable codes', async () => {
   for (const [failure, expectedCode] of [
     [Object.assign(new Error('Missing required OPFS APIs'), { resultCode: 14 }), 'opfsUnavailable'],
@@ -87,7 +89,7 @@ test('shared schema-v3 is the only active catalog DDL source for Electron and We
     new URL('../../electron/library-catalog-worker.cjs', import.meta.url),
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url)
   ]) {
-    const source = fs.readFileSync(url, 'utf8');
+    const source = fs.readFileSync(url, 'utf8') + '\n' + catalogRuntimeCoreSource;
     assert.doesNotMatch(source, /\b(?:CREATE\s+(?:TABLE|INDEX)|ALTER\s+TABLE)\b/i);
   }
 });
@@ -106,7 +108,7 @@ test('Electron and Web catalogs expose the scan-folder track-count command', () 
     new URL('../../electron/library-catalog-worker.cjs', import.meta.url),
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url)
   ]) {
-    const source = fs.readFileSync(url, 'utf8');
+    const source = fs.readFileSync(url, 'utf8') + '\n' + catalogRuntimeCoreSource;
     assert.match(source, /case 'getScanFolderTrackCount': return getScanFolderTrackCount\(payload\)/);
     assert.match(source, /function getScanFolderTrackCount\(payload\)/);
   }
@@ -266,7 +268,7 @@ test('Web folder directory browsing keeps physical hierarchy counts and direct-t
   const runtimeSource = fs.readFileSync(
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url),
     'utf8'
-  );
+  ) + '\n' + catalogRuntimeCoreSource;
   assert.match(runtimeSource, /DELETE FROM directories\s+WHERE folder_id = \? AND relative_path = \? AND recursive_track_count = 0/);
   assert.doesNotMatch(runtimeSource, /DELETE FROM directories WHERE folder_id = \? AND recursive_track_count = 0/);
   assert.match(runtimeSource, /folder_id = \?[\s\S]*instr\(t\.relative_path, '\/'\) = 0/);
@@ -562,7 +564,7 @@ test('Web SQLite tombstones hide removed-folder tracks and related entities befo
   const source = fs.readFileSync(
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url),
     'utf8'
-  );
+  ) + '\n' + catalogRuntimeCoreSource;
   assert.match(source, /const ACTIVE_TRACK_FOLDER_CLAUSE = `EXISTS\([\s\S]*active_folder\.status <> 'removed'/);
   assert.match(source, /function createContextFilter\([\s\S]*const clauses = \[context\.scope\?\.playlistId[\s\S]*ACTIVE_TRACK_FOLDER_CLAUSE/);
   for (const [membershipTable, keyColumn] of [
@@ -846,7 +848,7 @@ test('Web SQLite statfs shim exposes total capacity for proportional artwork adm
   const source = fs.readFileSync(
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url),
     'utf8'
-  );
+  ) + '\n' + catalogRuntimeCoreSource;
   assert.match(source, /statfsSync\(\)[\s\S]*return \{ bsize: 1, blocks, bavail:/);
 });
 
@@ -855,7 +857,7 @@ test('Electron and Web playlist context pages expose resolved and unresolved agg
     new URL('../../electron/library-catalog-worker.cjs', import.meta.url),
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url)
   ]) {
-    const source = fs.readFileSync(url, 'utf8');
+    const source = fs.readFileSync(url, 'utf8') + '\n' + catalogRuntimeCoreSource;
     assert.match(source, /AS resolvedCount/);
     assert.match(source, /resolvedCount: counts\.resolvedCount/);
     assert.match(source, /unresolvedCount: counts\.unresolvedCount/);
@@ -867,7 +869,7 @@ test('Electron and Web playlist pages keep tombstoned sources visible as unresol
     new URL('../../electron/library-catalog-worker.cjs', import.meta.url),
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url)
   ]) {
-    const source = fs.readFileSync(url, 'utf8');
+    const source = fs.readFileSync(url, 'utf8') + '\n' + catalogRuntimeCoreSource;
     assert.match(source, /const ACTIVE_PLAYLIST_TRACK_CLAUSE = `\(i\.track_uid IS NOT NULL AND/);
     assert.match(source, /CASE WHEN \$\{ACTIVE_PLAYLIST_TRACK_CLAUSE\} THEN i\.track_uid ELSE NULL END AS trackUid/);
     assert.match(source, /COALESCE\(sum\(CASE WHEN \$\{ACTIVE_PLAYLIST_TRACK_CLAUSE\} THEN 1 ELSE 0 END\), 0\) AS resolvedCount/);
@@ -880,7 +882,7 @@ test('Web scan sweep uses bounded pages and yields to the Worker task queue betw
   const runtime = fs.readFileSync(
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url),
     'utf8'
-  );
+  ) + '\n' + catalogRuntimeCoreSource;
   const sweepStart = runtime.indexOf('function runScanSweep');
   const sweepEnd = runtime.indexOf('\n}\n\nfunction repairPlaylistItemsForTrack', sweepStart);
   const sweep = runtime.slice(sweepStart, sweepEnd);
@@ -931,7 +933,7 @@ test('Web automatic playlist import resolves its trusted same-folder path before
   const runtime = fs.readFileSync(
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url),
     'utf8'
-  );
+  ) + '\n' + catalogRuntimeCoreSource;
   assert.match(runtime, /const trustedOriginMatch = resolveImportedTrackFromOrigin\(unresolved\);[\s\S]*if \(trustedOriginMatch\) return trustedOriginMatch/);
   assert.match(runtime, /WHERE t\.folder_id = \? AND t\.source_kind = 'file' AND t\.relative_path = \? COLLATE NOCASE[\s\S]*LIMIT 2/);
   assert.match(runtime, /path\.posix\.dirname\(playlistRelativePath\)/);
@@ -1082,7 +1084,7 @@ test('folder deletion batches tracks while foreground and maintenance work yield
     new URL('../../electron/library-catalog-worker.cjs', import.meta.url),
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url)
   ]) {
-    const source = fs.readFileSync(url, 'utf8');
+    const source = fs.readFileSync(url, 'utf8') + '\n' + catalogRuntimeCoreSource;
     assert.match(source, /const FOLDER_DELETION_TRACKS_PER_CHUNK = 100/);
     const chunkStart = source.indexOf('function runFolderDeletionChunkInTransaction');
     const chunkEnd = source.indexOf('\n}\n\nfunction ensureFolderDeletionJob', chunkStart);
@@ -1127,7 +1129,7 @@ test('playlist re-resolution is queued once per completed folder scan outside th
     new URL('../../electron/library-catalog-worker.cjs', import.meta.url),
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url)
   ]) {
-    const source = fs.readFileSync(url, 'utf8');
+    const source = fs.readFileSync(url, 'utf8') + '\n' + catalogRuntimeCoreSource;
     const metadataStart = source.indexOf('function completeMetadataParseSuccess');
     const metadataEnd = source.indexOf('\n}\n\nfunction completeMetadataParseFailure', metadataStart);
     const terminalStart = source.indexOf('function setScanTerminal');
@@ -1160,7 +1162,7 @@ test('scan entity aggregates are deferred to one durable phased post-scan job', 
     new URL('../../electron/library-catalog-worker.cjs', import.meta.url),
     new URL('../../js/library/repository/web-sqlite-runtime.js', import.meta.url)
   ]) {
-    const source = fs.readFileSync(url, 'utf8');
+    const source = fs.readFileSync(url, 'utf8') + '\n' + catalogRuntimeCoreSource;
     const metadataStart = source.indexOf('function completeMetadataParseSuccess');
     const metadataEnd = source.indexOf('\n}\n\nfunction completeMetadataParseFailure', metadataStart);
     const terminalStart = source.indexOf('function setScanTerminal');

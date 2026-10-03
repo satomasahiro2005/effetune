@@ -60,16 +60,45 @@ export class HistoryManager {
         }
     }
 
+    serializePlugin(plugin) {
+        return this.pipelineManager.core.getSerializablePluginState(plugin, true, false, false);
+    }
+
     createSnapshot() {
         return {
-            pipelineA: this.audioManager.pipelineA.map(plugin =>
-                this.pipelineManager.core.getSerializablePluginState(plugin, true, false, false)
-            ),
+            pipelineA: this.audioManager.pipelineA.map(plugin => this.serializePlugin(plugin)),
             pipelineB: this.audioManager.pipelineB ? this.audioManager.pipelineB.map(plugin =>
-                this.pipelineManager.core.getSerializablePluginState(plugin, true, false, false)
+                this.serializePlugin(plugin)
             ) : null,
             currentPipeline: this.audioManager.currentPipeline
         };
+    }
+
+    matchesRecordedPluginState(plugin) {
+        const recorded = this.history[this.historyIndex];
+        if (!recorded) return false;
+        for (const [pipeline, recordedPipeline] of [
+            [this.audioManager.pipelineA, recorded.pipelineA],
+            [this.audioManager.pipelineB, recorded.pipelineB]
+        ]) {
+            const index = pipeline?.indexOf(plugin) ?? -1;
+            if (index >= 0) {
+                return this.statesEqual(this.serializePlugin(plugin), recordedPipeline?.[index] ?? null);
+            }
+        }
+        return false;
+    }
+
+    get canUndo() {
+        return this.historyIndex > 0;
+    }
+
+    get canRedo() {
+        return this.historyIndex < this.history.length - 1;
+    }
+
+    updateEditButtons() {
+        globalThis.window?.uiManager?.updateEditButtons?.();
     }
 
     statesEqual(left, right) {
@@ -95,6 +124,7 @@ export class HistoryManager {
                 if (this.activeOperationOwnerIndex < 0) this.endOperation();
             }
         }
+        this.updateEditButtons();
     }
 
     /**
@@ -123,6 +153,7 @@ export class HistoryManager {
                     this.activeOperationShiftedStates = [];
                 }
                 this.activeOperationOwnerIndex = -1;
+                this.updateEditButtons();
             }
             return;
         }
@@ -142,8 +173,17 @@ export class HistoryManager {
         }
     }
 
-    saveStateAtomicallyIfChanged() {
+    /**
+     * Record a plugin update made outside a UI parameter operation.
+     * The update is recorded only when the updating plugin's own state differs
+     * from the recorded state. Otherwise plugin-internal asynchronous updates
+     * (e.g. a Room EQ design or IR load after a preset load or undo) would
+     * record unrelated unrecorded changes such as timer automation, adding
+     * history entries and discarding the redo stack.
+     */
+    saveStateAtomicallyIfChanged(plugin) {
         if (this.isHistorySuppressed) return false;
+        if (plugin && this.matchesRecordedPluginState(plugin)) return false;
 
         const state = this.createSnapshot();
         if (this.statesEqual(state, this.history[this.historyIndex] || null)) return false;
@@ -163,6 +203,7 @@ export class HistoryManager {
         }
         
         this.historyIndex--;
+        this.updateEditButtons();
         this.loadStateFromHistory();
     }
     
@@ -181,6 +222,7 @@ export class HistoryManager {
         }
         
         this.historyIndex++;
+        this.updateEditButtons();
         this.loadStateFromHistory();
     }
     

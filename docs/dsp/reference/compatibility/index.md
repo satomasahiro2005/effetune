@@ -17,13 +17,13 @@ The npm package is ESM-only; use `.mjs` or a consumer package with
 Graph v1 is supported on the JavaScript and Python bindings only; see
 [Graph v1 supported surfaces](/dsp/reference/graph-v1/#supported-surfaces).
 
-The core does not decode, encode, resample, call ffmpeg, host VST/AU, or expose public
-integrated-LUFS/true-peak measurement.
+The core does not decode, encode, resample, call ffmpeg, or host VST/AU. Loudness and
+true-peak readings are available through `AnalogMeter` telemetry.
 
 ## Analyzers and telemetry
 
-`ChromaSpiral`, `LevelMeter`, `NoteSpectrogram`, `Oscilloscope`, `PitchMeter`,
-`SpectrumAnalyzer`, `Spectrogram`, and `StereoMeter` expose decoded semantic observations in Python, JavaScript offline and
+`AnalogMeter`, `ChromaSpiral`, `LevelMeter`, `NoteSpectrogram`, `Oscilloscope`, `PitchMeter`,
+`RhythmAnalyzer`, `SpectrumAnalyzer`, `Spectrogram`, `StereoMeter`, and `TonalBalanceEQ` expose decoded semantic observations in Python, JavaScript offline and
 streaming processing, and AudioWorklet. Telemetry is opt-in: the first callback or
 subscriber enables it and the last unsubscribe disables it. Long renders drain after
 every processing block. Public frames identify the semantic effect and contain owned
@@ -34,7 +34,7 @@ Common metadata:
 
 | JavaScript / Python | Meaning |
 |---|---|
-| `kind` / `kind` | `level`, `noteSpectrogram`, `oscilloscope`, `pitch`, `spectrum`, `spectrumHq`, `spectrogram`, `spectrogramHq`, or `stereo` |
+| `kind` / `kind` | `analogMeter`, `level`, `noteSpectrogram`, `oscilloscope`, `pitch`, `rhythmAnalyzer`, `spectrum`, `spectrumHq`, `spectrogram`, `spectrogramHq`, `stereo`, or `tonalBalance` |
 | `effectType` / `effect_type` | Semantic effect type |
 | `effectId` / `effect_id` | Declared effect ID, or null / `None` |
 | `effectIndex` / `effect_index` | Zero-based position in the declared DSP chain |
@@ -45,6 +45,12 @@ Analyzer fields:
 
 | Kind | JavaScript / Python | Unit and shape / order |
 |---|---|---|
+| Analog Meter | `mode` / `mode` | Mode index: 0 VU, 1 PPM, 2 RMS, 3 Sample Peak, 4 True Peak, 5 Loudness |
+| Analog Meter | `channelCount` / `channel_count` | Number of channel records, 1 to 16 |
+| Analog Meter | `channels` / `channels` | Processing-channel order; each item has `needleDb` / `needle_db` and `maxDb` / `max_db`. Outside Loudness mode these are the ballistic needle reading in dB and the highest detector reading since the previous frame; VU and RMS readings are scaled so a sine wave reads its peak level. In Loudness mode they are that channel's momentary and short-term LUFS (unweighted, ungated reference values) |
+| Analog Meter | `integratedValid`, `lraValid` / `integrated_valid`, `lra_valid` | True once integrated loudness or loudness range has enough gated data; always false outside Loudness mode |
+| Analog Meter | `program` / `program` | Loudness mode only, otherwise null / `None`: `momentary`, `shortTerm` / `short_term`, and `integrated` in LUFS (BS.1770 / EBU R128), `lra` in LU (EBU Tech 3342), `maxTruePeak` / `max_true_peak` in dBTP, and `integratedSeconds` / `integrated_seconds`; `integrated` and `lra` are 0 until their valid flag is true |
+| Analog Meter | All dB and LUFS values | Floored at -240; true peak above 0 dBTP is reported as measured |
 | Level | `channels` / `channels` | Processing-channel order; each item has linear-amplitude `peak`, linear-amplitude `rms`, and boolean `clipped` (a sample exceeded full scale) |
 | Oscilloscope | `sampleRate` / `sample_rate` | Hz |
 | Oscilloscope | `captureSampleCount` / `capture_sample_count` | Samples in the full capture |
@@ -87,6 +93,18 @@ Analyzer fields:
 | Pitch | `confidence` / `confidence` | Detection confidence in [0, 1]; 0 when unvoiced |
 | Pitch | `levelDb` / `level_db` | Analyzed input level in dB |
 | Pitch | `voiced` / `voiced` | True when the pitch fields contain a detected fundamental pitch |
+| Rhythm Analyzer | `sampleRate` / `sample_rate` | Analysis rate in Hz: 48000 for 8, 11.025, 16, 22.05, 24, 32, 44.1, and 48 kHz input, 96000 for 88.2 and 96 kHz, and 192000 for 176.4, 192, 352.8, and 384 kHz; the input rate at any other rate |
+| Rhythm Analyzer | `generation` / `generation` | Non-zero analysis generation; a change indicates that tracker state restarted |
+| Rhythm Analyzer | `envelopeHopSamples`, `envelopeFrameCount` / `envelope_hop_samples`, `envelope_frame_count` | Onset-envelope step in samples at `sampleRate` (512 at 48000 Hz), and envelope frames analyzed since the generation started |
+| Rhythm Analyzer | `timeSeconds`, `latencySeconds` / `time_seconds`, `latency_seconds` | Observation time and analysis latency in seconds on the processing timeline; the latency includes the resampler delay when the input rate differs from `sampleRate` |
+| Rhythm Analyzer | `droppedEvents` / `dropped_events` | Onset events discarded before delivery |
+| Rhythm Analyzer | `locked`, `lockEpoch` / `locked`, `lock_epoch` | True while the analyzer follows a beat grid (false while searching, including within about 0.5 s of silence at the full-analysis rates), and the epoch identifying that grid; the epoch changes whenever the grid is re-aligned or changes beat level |
+| Rhythm Analyzer | `confidence` / `confidence` | Certainty of the shown beat in [0, 1]; at the full-analysis rates listed under `sampleRate`, the decoder's probability mass for the beat grid it follows (it commits to a grid at 0.95); at other rates, the fallback tracker's periodicity strength mapped from its hold threshold (0) to its lock threshold (1) |
+| Rhythm Analyzer | `periodSeconds` / `period_seconds` | Adopted beat period in seconds; 0 while unlocked |
+| Rhythm Analyzer | `nextBeatFrame`, `nextBeatFraction`, `nextBeatIndex` / `next_beat_frame`, `next_beat_fraction`, `next_beat_index` | Predicted next beat as an envelope frame, its fractional part in [0, 1), and its beat index |
+| Rhythm Analyzer | `combBestBpm` / `comb_best_bpm` | Strongest tempo candidate in BPM, locked or searching |
+| Rhythm Analyzer | `tempogram` / `tempogram` | JavaScript `Float32Array[192]` or Python `tuple[192]` normalized bins, 48 per octave from 30 to 480 BPM |
+| Rhythm Analyzer | `events` / `events` | Onset events since the previous frame; each has `frame`, `fraction`, `lockEpoch` / `lock_epoch`, `beatIndex` / `beat_index`, `beatFraction` / `beat_fraction`, `periodSeconds` / `period_seconds`, `strength`, `band` (0 low, 1 mid, 2 high), and `unlocked`; `strength` is in (0, 1]: the band detector's hit probability (above that band's detection threshold) at the full-analysis rates, or the onset's spectral flux relative to the band's recent peak at other rates |
 | Spectrogram | `sampleRate` / `sample_rate` | Hz |
 | Spectrogram | `timeSeconds` / `time_seconds` | Observation time in seconds on the processing timeline |
 | Spectrogram | `points` / `points` | FFT size exponent; FFT size is `2 ** points` |
@@ -100,6 +118,18 @@ Analyzer fields:
 | Stereo | `balance` / `balance` | Right-versus-left energy balance in dB |
 | Stereo | `peakLeft` / `peak_left` | Left linear-amplitude peak |
 | Stereo | `peakRight` / `peak_right` | Right linear-amplitude peak |
+| Tonal Balance EQ | `sampleRate` / `sample_rate` | Hz |
+| Tonal Balance EQ | `targetIndex` / `target_index` | Index of the active `target` choice |
+| Tonal Balance EQ | `absoluteGate`, `relativeGate` / `absolute_gate`, `relative_gate` | True when the last 400 ms block reached -70 LKFS, and when it also passed the relative gate; only gated-in audio updates the statistics |
+| Tonal Balance EQ | `loudnessValid`, `loudnessLkfs` / `loudness_valid`, `loudness_lkfs` | Integrated gated loudness since reset in LKFS; 0 until valid |
+| Tonal Balance EQ | `targetValid` / `target_valid` | True when the active target has data for at least one band |
+| Tonal Balance EQ | `makeupDb` / `makeup_db` | Applied make-up gain in dB |
+| Tonal Balance EQ | `gatedHopCount` / `gated_hop_count` | Gated-in analysis steps integrated since reset |
+| Tonal Balance EQ | `levelDb`, `persistence`, `presence` / `level_db`, `persistence`, `presence` | Per band: measured level in dB on the `averageSpl` scale; `persistence`, the share of analysis time the band was above the hearing threshold, in [0, 1]; and `presence`, `persistence` times the share judged to be music content rather than steady noise or noise floor, in [0, 1]; 41 ERB-rate bands at `(10 ** ((b + 1) / 21.4) - 1) * 1000 / 4.37` Hz, 26 Hz to 18.6 kHz, as JavaScript `Float32Array[41]` or Python `tuple[41]` |
+| Tonal Balance EQ | `commandDb` / `command_db` | Per-band correction in dB before the cut-only shift |
+| Tonal Balance EQ | `targetMuDb`, `targetSigmaDb` / `target_mu_db`, `target_sigma_db` | Active target relative level and its spread per band in dB; 0 where the target has no data |
+| Tonal Balance EQ | `bandFlags` / `band_flags` | `uint8[41]`: bit 0 stationary, bit 1 noise floor, bit 2 has target, bit 3 has level, bit 4 inside `low`-`high` |
+| Tonal Balance EQ | `responseDb` / `response_db` | Applied response including make-up gain in dB at 128 points `20 * 1000 ** (i / 127)` Hz |
 
 `frame.dropped` reports loss since the previous decoded delivery. By contrast,
 `dropped_telemetry_frames` on a Python stream and `droppedTelemetryFrames` on a
@@ -109,5 +139,5 @@ Telemetry stays local: the library only passes decoded frames to in-process Pyth
 callbacks or callbacks in the browser page. It does not automatically collect, persist,
 or send telemetry over the network, and it does not collect device or user identifiers.
 
-Other catalog telemetry remains metadata-only. Integrated LUFS, BS.1770/EBU
-R128, true peak, and dynamics gain-reduction observations are not part of this API.
+Other catalog telemetry remains metadata-only. Dynamics gain-reduction observations
+are not part of this API.

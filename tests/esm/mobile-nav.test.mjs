@@ -216,8 +216,9 @@ test('resumeAudioContext handles power controller resume rejection without unhan
 test('MobileNav preserves Visualizer on layout reapplication and leaves on explicit navigation', async () => {
   const documentRef = createDocument();
   documentRef.body.classList.add('view-player', 'view-visualizer');
+  const { nav: bottomNav, entries } = createBottomNav();
   const nav = Object.assign(Object.create(MobileNav.prototype), {
-    nav: null,
+    nav: bottomNav,
     uiManager: {
       hideVisualizerView() { documentRef.body.classList.remove('view-visualizer'); },
       hideLibraryView() {}
@@ -227,7 +228,8 @@ test('MobileNav preserves Visualizer on layout reapplication and leaves on expli
   await withGlobals({ document: documentRef }, () => {
     nav.applyViewState('visualizer', { fromLibraryView: true });
     assert.equal(nav.getCurrentView(), 'visualizer');
-    assert.equal(documentRef.body.classList.contains('view-player'), true);
+    assert.equal(documentRef.body.classList.contains('view-player'), false);
+    assert.equal(entries[0].button.classList.contains('active'), true);
     nav.setView('effects');
     assert.equal(nav.getCurrentView(), 'effects');
     assert.equal(documentRef.body.classList.contains('view-visualizer'), false);

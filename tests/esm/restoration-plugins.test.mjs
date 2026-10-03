@@ -256,7 +256,7 @@ async function loadPlugin(definition, telemetryHub = null) {
 }
 
 test('Restoration telemetry HUD has the shared AM-style enclosure', async () => {
-  const stylesheet = await fs.readFile(path.join(repoRoot, 'effetune.css'), 'utf8');
+  const stylesheet = await fs.readFile(path.join(repoRoot, 'css/effetune.css'), 'utf8');
   const rule = stylesheet.match(/\.restoration-telemetry-hud\s*\{([\s\S]*?)\}/);
   assert.ok(rule, 'Restoration telemetry HUD rule must exist');
   for (const declaration of [

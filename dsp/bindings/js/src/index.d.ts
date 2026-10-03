@@ -1,9 +1,11 @@
 export type {
+  AnalogMeterOptions,
   ChromaSpiralOptions,
   LevelMeterOptions,
   NoteSpectrogramOptions,
   OscilloscopeOptions,
   PitchMeterOptions,
+  RhythmAnalyzerOptions,
   SpectrogramOptions,
   SpectrumAnalyzerOptions,
   StereoMeterOptions,
@@ -105,6 +107,7 @@ export type {
   TapeArtifactsOptions,
   TVAudioSimulatorOptions,
   TiltEQOptions,
+  TonalBalanceEQOptions,
   ToneControlOptions,
   TransientShaperOptions,
   TremoloOptions,
@@ -114,11 +117,13 @@ export type {
   WowFlutterOptions
 } from './generated-effects.js';
 export {
+  AnalogMeter,
   ChromaSpiral,
   LevelMeter,
   NoteSpectrogram,
   Oscilloscope,
   PitchMeter,
+  RhythmAnalyzer,
   Spectrogram,
   SpectrumAnalyzer,
   StereoMeter,
@@ -217,6 +222,7 @@ export {
   TapeArtifacts,
   TVAudioSimulator,
   TiltEQ,
+  TonalBalanceEQ,
   ToneControl,
   TransientShaper,
   Tremolo,
@@ -224,11 +230,13 @@ export {
   VinylArtifacts,
   VinylSimulator,
   WowFlutter,
+  createAnalogMeter,
   createChromaSpiral,
   createLevelMeter,
   createNoteSpectrogram,
   createOscilloscope,
   createPitchMeter,
+  createRhythmAnalyzer,
   createSpectrogram,
   createSpectrumAnalyzer,
   createStereoMeter,
@@ -325,6 +333,7 @@ export {
   createTapeArtifacts,
   createTVAudioSimulator,
   createTiltEQ,
+  createTonalBalanceEQ,
   createToneControl,
   createTransientShaper,
   createTremolo,
@@ -451,8 +460,8 @@ export interface CreateChainOptions extends ArtifactOptions {
 }
 
 export interface TelemetryFrameBase {
-  readonly kind: 'level' | 'noteSpectrogram' | 'oscilloscope' | 'pitch' | 'spectrum' | 'spectrumHq' |
-    'spectrogram' | 'spectrogramHq' | 'stereo';
+  readonly kind: 'analogMeter' | 'level' | 'noteSpectrogram' | 'oscilloscope' | 'pitch' |
+    'rhythmAnalyzer' | 'spectrum' | 'spectrumHq' | 'spectrogram' | 'spectrogramHq' | 'stereo' | 'tonalBalance';
   readonly effectType: EffectType;
   readonly effectId: string | null;
   readonly effectIndex: number;
@@ -537,6 +546,78 @@ export interface PitchMeterTelemetryFrame extends TelemetryFrameBase {
   readonly voiced: boolean;
 }
 
+export interface AnalogMeterTelemetryChannel {
+  /** Needle dB, or channel Momentary LUFS in Loudness mode. */
+  readonly needleDb: number;
+  /** Detector maximum dB since the previous frame, or channel Short-term LUFS in Loudness mode. */
+  readonly maxDb: number;
+}
+
+export interface AnalogMeterTelemetryProgram {
+  readonly momentary: number;
+  readonly shortTerm: number;
+  /** Integrated LUFS; 0 while `integratedValid` is false. */
+  readonly integrated: number;
+  /** Loudness Range LU; 0 while `lraValid` is false. */
+  readonly lra: number;
+  readonly maxTruePeak: number;
+  readonly integratedSeconds: number;
+}
+
+export interface AnalogMeterTelemetryFrame extends TelemetryFrameBase {
+  readonly kind: 'analogMeter';
+  /** 0 VU, 1 PPM, 2 RMS, 3 Sample Peak, 4 True Peak, 5 Loudness. */
+  readonly mode: number;
+  readonly channelCount: number;
+  readonly integratedValid: boolean;
+  readonly lraValid: boolean;
+  readonly channels: readonly AnalogMeterTelemetryChannel[];
+  /** Program loudness in Loudness mode; null otherwise. */
+  readonly program: AnalogMeterTelemetryProgram | null;
+}
+
+export interface RhythmAnalyzerTelemetryEvent {
+  /** Onset time as envelope frame integer part plus `fraction`, bias-corrected. */
+  readonly frame: number;
+  readonly fraction: number;
+  /** Grid epoch used for the prediction; 0 when `unlocked`. */
+  readonly lockEpoch: number;
+  /** Predicted beat index at or before the onset; may be -1 right after a lock. */
+  readonly beatIndex: number;
+  /** Position between predicted beats in [0, 1). */
+  readonly beatFraction: number;
+  readonly periodSeconds: number;
+  readonly strength: number;
+  /** 0 low, 1 mid, 2 high. */
+  readonly band: number;
+  /** True when no beat grid was available; carries no deviation. */
+  readonly unlocked: boolean;
+}
+
+export interface RhythmAnalyzerTelemetryFrame extends TelemetryFrameBase {
+  readonly kind: 'rhythmAnalyzer';
+  readonly sampleRate: number;
+  readonly generation: number;
+  readonly envelopeHopSamples: number;
+  /** Envelope frames analysed since the generation started. */
+  readonly envelopeFrameCount: number;
+  readonly timeSeconds: number;
+  readonly latencySeconds: number;
+  readonly droppedEvents: number;
+  readonly locked: boolean;
+  readonly lockEpoch: number;
+  readonly confidence: number;
+  /** Beat period; 0 while unlocked. */
+  readonly periodSeconds: number;
+  readonly nextBeatFrame: number;
+  readonly nextBeatFraction: number;
+  readonly nextBeatIndex: number;
+  readonly combBestBpm: number;
+  /** 192 normalized bins, 48 per octave from 30 to 480 BPM. */
+  readonly tempogram: Float32Array;
+  readonly events: readonly RhythmAnalyzerTelemetryEvent[];
+}
+
 export interface SpectrogramTelemetryFrame extends TelemetryFrameBase {
   readonly kind: 'spectrogram';
   readonly sampleRate: number;
@@ -574,7 +655,37 @@ export interface StereoTelemetryFrame extends TelemetryFrameBase {
   readonly peakRight: number;
 }
 
+export interface TonalBalanceEQTelemetryFrame extends TelemetryFrameBase {
+  readonly kind: 'tonalBalance';
+  readonly sampleRate: number;
+  /** Index of the active Target choice. */
+  readonly targetIndex: number;
+  /** The last 400 ms block was at or above -70 LKFS. */
+  readonly absoluteGate: boolean;
+  /** The last block also passed the relative gate. */
+  readonly relativeGate: boolean;
+  readonly loudnessValid: boolean;
+  readonly targetValid: boolean;
+  /** Integrated gated loudness since reset; 0 while `loudnessValid` is false. */
+  readonly loudnessLkfs: number;
+  readonly makeupDb: number;
+  readonly gatedHopCount: number;
+  /** 41 ERB-rate bands from 26 Hz to 18.6 kHz: measured level (dB SPL scale). */
+  readonly levelDb: Float32Array;
+  readonly persistence: Float32Array;
+  readonly presence: Float32Array;
+  /** Correction command per band before the cut-only shift (dB). */
+  readonly commandDb: Float32Array;
+  readonly targetMuDb: Float32Array;
+  readonly targetSigmaDb: Float32Array;
+  /** Per band: bit0 stationary, bit1 floor, bit2 has target, bit3 has level, bit4 in range. */
+  readonly bandFlags: Uint8Array;
+  /** Applied response incl. make-up at 128 log-spaced points from 20 Hz to 20 kHz (dB). */
+  readonly responseDb: Float32Array;
+}
+
 export type TelemetryFrame =
+  | AnalogMeterTelemetryFrame
   | LevelTelemetryFrame
   | OscilloscopeTelemetryFrame
   | SpectrumTelemetryFrame
@@ -583,7 +694,9 @@ export type TelemetryFrame =
   | SpectrogramHqTelemetryFrame
   | NoteSpectrogramTelemetryFrame
   | PitchMeterTelemetryFrame
-  | StereoTelemetryFrame;
+  | RhythmAnalyzerTelemetryFrame
+  | StereoTelemetryFrame
+  | TonalBalanceEQTelemetryFrame;
 
 export type TelemetryCallback = (frame: TelemetryFrame) => void;
 

@@ -624,7 +624,7 @@ test('Console channel debug previews UI on stereo hardware without promising wor
 
 test('renders and updates pipeline delay and CPU usage meters', async () => {
   const html = fs.readFileSync(new URL('../../effetune.html', import.meta.url), 'utf8');
-  const css = fs.readFileSync(new URL('../../effetune.css', import.meta.url), 'utf8');
+  const css = fs.readFileSync(new URL('../../css/effetune.css', import.meta.url), 'utf8');
   assert.match(html, /id="pipelineLatency">Total Delay: 0 samples</);
   assert.match(html, /id="pipelineCpuUsage"[^>]*data-level="normal"/);
   assert.doesNotMatch(html, /pipelineCpuMeterPeak|Peak 0\.0%/);
@@ -722,6 +722,24 @@ test('Pipeline Analyzer host owns absolute open state and disposes the Electron 
   } finally {
     globalThis.window = previousWindow;
   }
+});
+
+test('updateEditButtons disables pipeline edit buttons that have nothing to act on', () => {
+  const manager = Object.create(UIManager.prototype);
+  for (const name of ['undoButton', 'redoButton', 'cutButton', 'copyButton']) manager[name] = { disabled: false };
+  manager.pipelineManager = {
+    historyManager: { canUndo: false, canRedo: true },
+    core: { selectedPlugins: new Set() }
+  };
+  const states = () => ['undoButton', 'redoButton', 'cutButton', 'copyButton'].map(name => manager[name].disabled);
+
+  manager.updateEditButtons();
+  assert.deepEqual(states(), [true, false, true, true]);
+
+  manager.pipelineManager.historyManager = { canUndo: true, canRedo: false };
+  manager.pipelineManager.core.selectedPlugins.add({});
+  manager.updateEditButtons();
+  assert.deepEqual(states(), [false, true, false, false]);
 });
 
 test('Music Library catalog initialization is deferred until the library is requested', async () => {

@@ -23,10 +23,10 @@ const excludedFiles = new Set([
   'js/visualizer/visualizer-palette-presets.js'
 ]);
 const targets = [
-  'effetune.css',
-  'effetune-mobile.css',
-  'effetune-library.css',
-  'pipeline-analyzer.css',
+  'css/effetune.css',
+  'css/effetune-mobile.css',
+  'css/effetune-library.css',
+  'css/pipeline-analyzer.css',
   'effetune.html',
   'features/measurement/measurement.html',
   'features/effetune_bench.html',
