@@ -240,32 +240,47 @@ try {
   const urlRe = new RegExp(`^ws://(\\d+\\.\\d+\\.\\d+\\.\\d+):${port}/\\?t=${token}$`);
   check('panel status: running with pairing URL ws://<ip>:port/?t=token',
     status.running === true && urlRe.test(status.url), status.url);
-  check('panel status: QR image for every offered address',
-    status.addresses.length >= 1 && status.addresses.every((a) => /^data:image\/svg\+xml;base64,/.test(a.qr || '')),
-    status.addresses.map((a) => `${a.address} (${a.name})`).join(', '));
   const dom = await panel.evaluate(`({ url: document.getElementById('url').textContent,
     qr: (document.getElementById('qr').getAttribute('src') || '').slice(0, 30),
     qrWidth: document.getElementById('qr').naturalWidth,
     hidden: document.getElementById('pairing').hidden,
     checked: document.getElementById('enabled').checked,
     status: document.getElementById('status').textContent })`);
-  // Browser (the web client the app serves) is the default; App shows the ws:// link.
+  // One link and one QR for every client: the http URL the app serves (apps derive ws:// from it).
   const webRe = new RegExp(`^http://(\\d+\\.\\d+\\.\\d+\\.\\d+):${port}/\\?t=${token}$`);
   check('panel status: webUrl http://<ip>:port/?t=token next to the ws url', webRe.test(status.webUrl || ''), status.webUrl);
-  check('panel status: a QR image for the web link of every offered address',
+  check('panel status: a QR image for the link of every offered address',
     status.addresses.every((a) => /^data:image\/svg\+xml;base64,/.test(a.webQr || '') && webRe.test(a.webUrl)),
     status.addresses.map((a) => a.webUrl).join(', '));
-  check('panel shows the switch on, the QR and the Browser link by default', dom.checked && !dom.hidden && dom.url === status.webUrl &&
+  check('panel shows the switch on, the QR and the http link', dom.checked && !dom.hidden && dom.url === status.webUrl &&
     dom.qr.startsWith('data:image/svg+xml') && dom.qrWidth > 0, JSON.stringify(dom));
+  const noModes = await panel.evaluate(`({ app: !!document.getElementById('mode-app'),
+    browser: !!document.getElementById('mode-browser'),
+    text: /\\bApp\\b/.test([...document.querySelectorAll('button')].map((b) => b.textContent).join(' ')),
+    select: getComputedStyle(document.getElementById('url')).userSelect })`);
+  check('no Browser/App control; the link text is selectable',
+    !noModes.app && !noModes.browser && !noModes.text && /^(all|text)$/.test(noModes.select), JSON.stringify(noModes));
   await screenshot(panel, 'panel-on.png');
-  await panel.evaluate(`document.getElementById('mode-app').click()`);
-  const appDom = await panel.evaluate(`({ url: document.getElementById('url').textContent,
-    qr: document.getElementById('qr').getAttribute('src'), pressed: document.getElementById('mode-app').getAttribute('aria-pressed') })`);
-  check('App mode shows the ws:// link and its own QR', appDom.url === status.url && appDom.pressed === 'true' &&
-    appDom.qr === status.addresses[0].qr && appDom.qr !== status.addresses[0].webQr, JSON.stringify(appDom).slice(0, 200));
-  await panel.evaluate(`document.getElementById('mode-browser').click()`);
-  const browserAgain = await panel.evaluate(`document.getElementById('url').textContent`);
-  check('Browser mode shows the web link again', browserAgain === status.webUrl, browserAgain);
+  // Copy link: Electron's clipboard in the main process, read back from the main process.
+  const readClipboard = async () => {
+    const target = await waitForTarget(inspectPort, () => true);
+    const main = await connect(target.webSocketDebuggerUrl);
+    const text = await main.evaluate(`process.mainModule.require('electron').clipboard.readText()`);
+    main.close();
+    return text;
+  };
+  {
+    const target = await waitForTarget(inspectPort, () => true);
+    const main = await connect(target.webSocketDebuggerUrl);
+    await main.evaluate(`process.mainModule.require('electron').clipboard.writeText('sentinel')`);
+    main.close();
+  }
+  await panel.evaluate(`document.getElementById('copy').click()`);
+  await sleep(500);
+  const copiedText = await readClipboard();
+  const copyLabel = await panel.evaluate(`document.getElementById('copy').textContent`);
+  check('Copy link puts the http URL on the clipboard and shows Copied',
+    copiedText === status.webUrl && copyLabel === 'Copied', JSON.stringify({ copiedText, copyLabel }));
   const page = await fetch(`http://127.0.0.1:${port}/`);
   const pageText = await page.text();
   check('GET / on the remote port serves remote.html with a connect-src for its own host',

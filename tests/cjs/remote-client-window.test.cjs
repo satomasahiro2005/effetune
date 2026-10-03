@@ -175,6 +175,14 @@ test('the host knows its own addresses and builds the browser link', () => {
   const status = host.getStatus({ withQr: true });
   assert.match(status.webUrl, /^http:\/\/[\d.]+:47300\/\?t=abcd1234$/);
   assert.match(status.url, /^ws:\/\//);
+  assert.equal(status.addresses[0].qr, undefined);
   assert.match(status.addresses[0].webQr, /^data:image\/svg\+xml;base64,/);
   assert.equal(host.joinRemote('nope').ok, false);
+  const copied = [];
+  host.clipboard = { writeText: text => copied.push(text) };
+  assert.equal(host.copyLink(0), true);
+  assert.deepEqual(copied, ['http://192.168.1.5:47300/?t=abcd1234']);
+  assert.equal(host.copyLink(5), false, 'an unknown address copies nothing');
+  host.clipboard = { writeText: () => { throw new Error('denied'); } };
+  assert.equal(host.copyLink(0), false);
 });

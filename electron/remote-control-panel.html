@@ -82,10 +82,6 @@
     padding: 8px; border: 1px solid var(--line); border-radius: 6px;
   }
   .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-  .segmented { display: flex; margin: 0 auto 12px; max-width: 300px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  .segmented button { flex: 1; border: 0; border-radius: 0; background: transparent; padding: 6px 10px; }
-  .segmented button + button { border-left: 1px solid var(--line); }
-  .segmented button[aria-pressed="true"] { background: var(--accent); color: #fff; }
   #join-section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
   .join-row { display: flex; gap: 8px; }
   .join-row input {
@@ -108,10 +104,6 @@
     <ul class="devices" id="devices" hidden></ul>
 
     <div id="pairing" hidden>
-      <div class="segmented" role="group" aria-label="Connect from">
-        <button type="button" id="mode-browser" aria-pressed="true">Browser</button>
-        <button type="button" id="mode-app" aria-pressed="false">App</button>
-      </div>
       <img class="qr" id="qr" alt="QR code of the connection URL">
       <div class="field" id="address-field" hidden>
         <label for="address">Network</label>
@@ -146,8 +138,6 @@
   let status = null;
   let selected = 0;
   let busy = false;
-  // Browser: link and QR code of the web client the app serves; App: the ws:// link for other apps.
-  let mode = 'browser';
 
   function statusText(s) {
     if (s.error) return { text: `Could not start: ${s.error}`, error: true };
@@ -189,12 +179,8 @@
       return option;
     }));
     const current = addresses[selected];
-    const browser = mode === 'browser';
-    $('mode-browser').setAttribute('aria-pressed', String(browser));
-    $('mode-app').setAttribute('aria-pressed', String(!browser));
-    $('url').textContent = browser ? current.webUrl : current.url;
-    const qr = browser ? current.webQr : current.qr;
-    if (qr) $('qr').src = qr;
+    $('url').textContent = current.webUrl;
+    if (current.webQr) $('qr').src = current.webQr;
     else $('qr').removeAttribute('src');
   }
 
@@ -221,9 +207,6 @@
     render();
   });
   $('regenerate').addEventListener('click', () => run(() => api.regenerateToken()));
-  for (const [id, value] of [['mode-browser', 'browser'], ['mode-app', 'app']]) {
-    $(id).addEventListener('click', () => { mode = value; render(); });
-  }
   async function join() {
     const error = $('join-error');
     error.textContent = '';
@@ -238,13 +221,15 @@
   }
   $('join').addEventListener('click', join);
   $('join-input').addEventListener('keydown', event => { if (event.key === 'Enter') join(); });
+  let copyTimer = null;
   $('copy').addEventListener('click', async () => {
-    const url = $('url').textContent;
-    try {
-      await navigator.clipboard.writeText(url);
+    let ok = false;
+    try { ok = await api.copyLink(selected); } catch (_) { ok = false; }
+    if (ok) {
       $('copy').textContent = 'Copied';
-      setTimeout(() => { $('copy').textContent = 'Copy link'; }, 1500);
-    } catch (_) {
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => { $('copy').textContent = 'Copy link'; }, 1500);
+    } else {
       const range = document.createRange();
       range.selectNodeContents($('url'));
       getSelection().removeAllRanges();

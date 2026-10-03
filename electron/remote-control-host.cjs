@@ -43,6 +43,7 @@ const PANEL_CHANNELS = Object.freeze({
   setEnabled: 'remote-panel-v1:set-enabled',
   regenerateToken: 'remote-panel-v1:regenerate-token',
   join: 'remote-panel-v1:join',
+  copyLink: 'remote-panel-v1:copy-link',
   status: 'remote-panel-v1:status'
 });
 
@@ -235,6 +236,7 @@ class RemoteControlHost {
     app,
     getMainWindow,
     config = null,
+    clipboard = null,
     env = process.env,
     argv = process.argv,
     log = console.log
@@ -244,6 +246,7 @@ class RemoteControlHost {
     this.dsp = resolveDspVersion(app);
     this.getMainWindow = getMainWindow;
     this.config = config;
+    this.clipboard = clipboard;
     this.log = log;
     this.forced = isRemoteForced(env, argv);
     const cfg = this.loadConfig();
@@ -355,7 +358,7 @@ class RemoteControlHost {
         name: c.name,
         url,
         webUrl,
-        ...(withQr ? { qr: qrSvgDataUrl(url), webQr: qrSvgDataUrl(webUrl) } : {})
+        ...(withQr ? { webQr: qrSvgDataUrl(webUrl) } : {})
       };
     });
     return {
@@ -701,6 +704,20 @@ class RemoteControlHost {
       isSelf: (host, port) => this.isOwnAddress(host, port),
       log: (...args) => this.log(...args)
     });
+  }
+
+  // Copy button: the main process puts the link of the offered address on the system clipboard
+  // (navigator.clipboard needs focus and a permission the panel window does not reliably have).
+  copyLink(index) {
+    const address = this.getStatus().addresses[Number.isInteger(index) ? index : 0];
+    if (!address) return false;
+    try {
+      (this.clipboard || require('electron').clipboard).writeText(address.webUrl);
+      return true;
+    } catch (error) {
+      this.log('[remote] copy link failed:', error?.message || error);
+      return false;
+    }
   }
 
   isPanelSender(sender) {
@@ -1370,6 +1387,7 @@ function registerRemoteControlIpc({ ipcMain, getHost, getMainWindow }) {
       await host.regenerateToken();
       return host.getStatus({ withQr: true });
     }],
+    [PANEL_CHANNELS.copyLink, (host, index) => host.copyLink(index)],
     [PANEL_CHANNELS.join, (host, input) => host.joinRemote(typeof input === 'string' ? input.slice(0, 600) : '')]
   ]);
   // Analyzer frames come by send (fire-and-forget, up to 30 Hz), not invoke.

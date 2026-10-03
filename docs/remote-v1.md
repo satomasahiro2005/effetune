@@ -43,11 +43,17 @@ the window title.
 
 ## Pairing
 
-The QR code encodes the connection URL itself, so any client can use it:
+One link and one QR code serve every client. It is the http URL of the web client the app
+hosts:
 
 ```
-ws://<LAN IPv4>:<port>/?t=<token>
+http://<LAN IPv4>:<port>/?t=<token>
 ```
+
+A browser opens it as is. A client that speaks WebSocket (for example the EffectDeck app) takes
+the same link and derives the connection URL from it: same host and port, scheme `ws`, same
+`t` (see Connection). The Remote Control window does not ask which kind of client will connect.
+**Copy link** puts this link on the system clipboard.
 
 The address is the computer's private IPv4 address (192.168.x, 10.x, 172.16-31.x). Virtual
 adapters (VirtualBox, Hyper-V, VMware, WSL, Docker, Tailscale's 100.64/10, VPNs) are left out
@@ -271,8 +277,7 @@ The desktop app also serves the EffeTune web client on the remote port, over pla
 http://<LAN IPv4>:<port>/?t=<token>
 ```
 
-Remote Control window > **Browser** shows this link and its QR code (the **App** tab shows the
-`ws://` link for other apps). The page is `remote.html`: the real effect list and pipeline editor
+The Remote Control window shows this link and its QR code (the same ones apps use). The page is `remote.html`: the real effect list and pipeline editor
 of EffeTune, without the player, library, audio settings or measurement tools. It keeps the token
 in `localStorage`, removes `t` from the address bar and opens `ws://<same host:port>/?t=<token>`.
 The hosted web version (https) cannot do this: a browser refuses `ws://` to a LAN address from an
