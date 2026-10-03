@@ -13,6 +13,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { connect, waitForTarget } from './remote-test-cdp.mjs';
 const require = createRequire(import.meta.url);
@@ -576,6 +577,32 @@ async function main() {
     const deleted = await evalIn(P2, () => window.pipelineManager.presetManager.deletePresets(['Sync A']));
     const gone = await waitFor(async () => !Object.keys(await evalIn(P1, () => window.pipelineManager.presetManager.getPresets())).includes('Sync A'), 3000, 100);
     check('14 deleting it from P2 removes it for P1 as well', deleted === true && gone !== null);
+  }
+
+  // ---- 14b. IR library changes --------------------------------------------------------------------------
+  {
+    const S = await rawClient('S', { hello: { op: 'hello', v: 1, seq: 1, app: 'EffectDeck', version: '2026.10', build: '99', sync: 1 } });
+    await S.waitFor((m) => m.op === 'state' && m.seq === 1);
+    const frames = 4800;
+    const wav = Buffer.alloc(44 + frames * 2);
+    wav.write('RIFF', 0); wav.writeUInt32LE(36 + frames * 2, 4); wav.write('WAVE', 8);
+    wav.write('fmt ', 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(48000, 24); wav.writeUInt32LE(96000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(frames * 2, 40);
+    for (let f = 0; f < frames; f++) wav.writeInt16LE(Math.round(Math.exp(-f / 600) * 16000 * (f % 7 === 0 ? 1 : -0.3)) + (f === frames - 1 ? 1234 : 0), 44 + f * 2);
+    const id = createHash('sha256').update(wav).digest('hex').slice(0, 24);
+    const mark = { S: S.inbox.length, E: E.inbox.length };
+    S.send({ op: 'putIR', seq: 30, id, name: 'SyncNotice.wav', ext: 'wav', index: 0, total: 1, bytes: wav.length, data: wav.toString('base64') });
+    const ack = await S.waitFor((m) => m.op === 'ack' && m.seq === 30, 15000);
+    check('14b putIR of a new IR succeeds', ack.ok === true, JSON.stringify(ack));
+    const notice = await S.waitFor((m) => m.op === 'irsChanged' && S.inbox.indexOf(m) >= mark.S, 4000).catch(() => null);
+    check('14b a sync client gets irsChanged (no seq) after the import', notice !== null && notice.seq === undefined);
+    S.send({ op: 'listIRs', seq: 31 });
+    const listed = await S.waitFor((m) => m.op === 'irs' && m.seq === 31);
+    check('14b and listIRs then contains the new IR', listed.items.some((item) => item.id === id));
+    await sleep(800);
+    check('14b the legacy client never sees irsChanged', !E.inbox.slice(mark.E).some((m) => m.op === 'irsChanged'));
+    S.ws.close();
   }
 
   // ---- 15. EffectDeck (legacy client) ---------------------------------------------------------------------
