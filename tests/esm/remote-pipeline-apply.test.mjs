@@ -133,6 +133,42 @@ test('recycling keeps the plugin instance when a stage is replaced by the same e
     assert.ok(win.pipelineManager.expandedPlugins.has(keep));
 });
 
+test('a recycled stage does not keep the buses, channel or enabled flag of the old instance', () => {
+    const { win, pipeline } = makeWin();
+    const registry = createIdRegistry('h');
+    const [a] = seed(win, registry, ['Volume']);
+    const old = pipeline[0];
+    old.inputBus = 3;
+    old.outputBus = 4;
+    old.channel = 'L';
+    old.enabled = false;
+    applyOpsToPipeline(win, [
+        { t: 'del', id: a },
+        { t: 'ins', id: 'h.new1', after: null, at: 0, item: { nm: 'Volume', vl: -3 } }
+    ], { registry, recycle: true });
+    assert.equal(pipeline[0], old);
+    assert.equal(old.inputBus, null);
+    assert.equal(old.outputBus, null);
+    assert.equal(old.channel, null);
+    assert.equal(old.enabled, true);
+    assert.equal(old.parameters.vl, -3);
+});
+
+test('a recycled stage still takes the buses its new item carries', () => {
+    const { win, pipeline } = makeWin();
+    const registry = createIdRegistry('h');
+    const [a] = seed(win, registry, ['Volume']);
+    pipeline[0].inputBus = 3;
+    applyOpsToPipeline(win, [
+        { t: 'del', id: a },
+        { t: 'ins', id: 'h.new1', after: null, at: 0, item: { nm: 'Volume', en: false, ib: 2, ch: 'R' } }
+    ], { registry, recycle: true });
+    assert.equal(pipeline[0].inputBus, 2);
+    assert.equal(pipeline[0].outputBus, null);
+    assert.equal(pipeline[0].channel, 'R');
+    assert.equal(pipeline[0].enabled, false);
+});
+
 test('without recycling a replaced stage is rebuilt from scratch', () => {
     const { win, pipeline } = makeWin();
     const registry = createIdRegistry('h');

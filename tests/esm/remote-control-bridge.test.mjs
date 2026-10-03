@@ -166,6 +166,22 @@ test('an edit batch is refused for a stale epoch, a bad op, an unknown effect or
     assert.equal(controller.takeSnapshot().ids.length, 0);
 });
 
+test('an edit made against the other slot is refused with slot-mismatch and changes nothing', async () => {
+    const { controller, ask, pipeline } = await setup();
+    pipeline.push(new FakePlugin('Volume', 1));
+    const { ids, epoch } = controller.takeSnapshot();
+    const ins = { t: 'ins', id: 'cabc.1', after: ids[0], at: 1, item: { nm: 'Mute', en: true } };
+    const refused = await ask({ op: 'edit', epoch, slot: 'B', ops: [ins] });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.error, 'slot-mismatch');
+    assert.equal(pipeline.length, 1);
+    assert.equal((await ask({ op: 'edit', epoch, slot: 'X', ops: [ins] })).error, 'invalid-op');
+    assert.equal((await ask({ op: 'edit', epoch, slot: 'A', ops: [ins] })).ok, true);
+    assert.equal(pipeline.length, 2);
+    await ask({ op: 'slot', slot: 'B' });
+    assert.equal((await ask({ op: 'edit', epoch, slot: 'A', ops: [{ t: 'set', id: ids[0], p: { vl: -1 } }] })).error, 'slot-mismatch');
+});
+
 test('history, slot and copy requests drive the same paths as the host buttons', async () => {
     const { ask, calls, audioManager } = await setup();
     assert.equal((await ask({ op: 'history', dir: 'undo' })).ok, true);

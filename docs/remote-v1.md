@@ -120,6 +120,11 @@ When one push covers changes of several origins, it is `"local"` if any of them 
 and it carries no `seq` if they came from different clients. A client can therefore follow
 the computer by applying every push that does not carry one of its own `seq` values.
 
+A client that cannot keep up with the pushes (its socket buffer is full) skips some and receives
+one coalesced `state` once it has drained. That state keeps the same rule: when everything it
+covers was that client's own commands it is `"remote"` with the `seq` of the latest of them, and
+otherwise it carries no `seq`.
+
 Replies to `hello` and `get` carry the request's `seq` and `"origin":"remote"`. They are
 snapshots, not echoes of an edit: always apply them. A command that leaves the pipeline as it
 was produces no push, so do not wait for one to confirm a command; the ack does that.
@@ -334,13 +339,21 @@ missing id are skipped, `ins` of an existing id is skipped, `set` is last-writer
 order the app receives them. A changed effect (`nm`) is a `del` plus an `ins`, never a `set`.
 
 ```
-→ {"op":"edit","seq":5,"epoch":"9f3a01cc","base":41,"ops":[...]}
+→ {"op":"edit","seq":5,"epoch":"9f3a01cc","base":41,"slot":"A","ops":[...]}
 ← {"op":"ack","seq":5,"ok":true,"rev":42,"skipped":[1]}
 ```
 
 The whole batch is validated before anything is applied. Errors (`ok:false`): `stale-epoch`,
-`invalid-op` (malformed op or id), `unknown-effect`, `too-long` (more than 512 ops or a result over
-256 stages). `base` (the client's confirmed `rev`) is informational and never makes an edit fail.
+`slot-mismatch`, `invalid-op` (malformed op or id), `unknown-effect`, `too-long` (more than 512 ops
+or a result over 256 stages). `base` (the client's confirmed `rev`) is informational and never makes
+an edit fail.
+
+`slot` is the pipeline (`"A"` or `"B"`) the client made the batch against, taken from the `state` it
+had adopted. Stage ids belong to one pipeline: when `slot` differs from the host's active slot (the
+A/B button was pressed in the meantime) the host answers `slot-mismatch` and applies nothing, so an
+`ins` can never land in the other pipeline. The client then fetches the state (`get`) and shows the
+active pipeline. A malformed `slot` is `invalid-op`; an `edit` without `slot` is applied to the
+active pipeline as before (clients written before this field).
 
 `rev` on acks: every ack of `edit`, `history`, `slot`, `copySlot`, `loadPreset` and also of the older
 `chain`, `params` and `bypass` carries `rev`, the app's revision after the command took effect. A

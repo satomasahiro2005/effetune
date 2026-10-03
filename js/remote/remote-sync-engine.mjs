@@ -40,6 +40,7 @@ export class SyncEngine {
         this.dirtyAll = false;
         this.dirtyIds = new Set();
         this.flushTimer = null;
+        this.divergences = 0;    // reconcile passes that needed a second apply
         // A change is only sent while the user is acting on this page.
         this.lastGestureAt = Number.NEGATIVE_INFINITY;
     }
@@ -116,7 +117,18 @@ export class SyncEngine {
         if (!expected) return;
         const local = this.adapter.snapshot();
         const ops = diff(local, expected);
-        if (ops.length > 0) this.adapter.apply(ops, { recycle: true });
+        if (ops.length > 0) {
+            this.adapter.apply(ops, { recycle: true });
+            // Safety net: the editor must now equal the model. A residue means an op
+            // left state behind (a recycled instance keeping an old bus, say); one
+            // more pass puts it right instead of leaving it to be sent to the host
+            // later as if the user had done it.
+            const rest = diff(this.adapter.snapshot(), expected);
+            if (rest.length > 0) {
+                this.divergences += 1;
+                this.adapter.apply(rest, { recycle: false });
+            }
+        }
         this.adapter.setSlot?.(expected.slot);
     }
 
@@ -176,9 +188,11 @@ export class SyncEngine {
         }, ACK_TIMEOUT_MS);
         const epoch = this.confirmed.epoch;
         const base = this.confirmed.rev;
+        // The pipeline the batch was made against; the host refuses it when another one is active.
+        const slot = this.confirmed.snapshot.slot;
         let reply;
         try {
-            reply = this.sendMessage({ op: 'edit', epoch, base, ops });
+            reply = this.sendMessage({ op: 'edit', epoch, base, slot, ops });
         } catch (error) {
             this.settle(entry);
             this.onError(error);
@@ -194,7 +208,7 @@ export class SyncEngine {
         if (!this.pending.includes(entry)) return;
         if (!ack || ack.ok !== true) {
             this.settle(entry);
-            if (ack?.error === 'stale-epoch') this.requestState();
+            if (ack?.error === 'stale-epoch' || ack?.error === 'slot-mismatch') this.requestState();
             this.onError(new Error(ack?.error || 'edit failed'));
             return;
         }

@@ -118,6 +118,9 @@ test('edit acks carry the host revision and skipped ops; stale epochs fail', asy
     const client = await open();
     client.send({ op: 'hello', v: 1, seq: 1, sync: 1 });
     await client.next(m => m.op === 'state' && m.seq === 1);
+    // The first snapshot counts as a local change and is broadcast on its own timer; an edit that
+    // arrives before that broadcast would be merged into it ("local", no seq).
+    await new Promise(resolve => setTimeout(resolve, 250));
     client.send({ op: 'edit', seq: 2, epoch: 'abcd0123', base: 1, ops: [{ t: 'set', id: 'h.1', p: { vl: -4 } }, { t: 'del', id: 'zz' }] });
     const ack = await client.next(m => m.op === 'ack' && m.seq === 2);
     assert.equal(ack.ok, true);
@@ -179,6 +182,55 @@ test('presets op replies with the stored presets', async () => {
     const reply = await client.next(m => m.op === 'presets' && m.seq === 2);
     assert.deepEqual(reply.presets, { Demo: { plugins: [] } });
     client.ws.close();
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('a client that was behind gets its own echo with its seq, but other changes without one', async () => {
+  const { host } = makeHost();
+  try {
+    await host.start();
+    host.setRendererReady();
+    const client = await open();
+    const other = await open();
+    client.send({ op: 'hello', v: 1, seq: 1, sync: 1 });
+    other.send({ op: 'hello', v: 1, seq: 1, sync: 1 });
+    await client.next(m => m.op === 'state' && m.seq === 1);
+    await other.next(m => m.op === 'state' && m.seq === 1);
+    await new Promise(resolve => setTimeout(resolve, 250)); // let the hello snapshots' own broadcast go out first
+    const sockets = [...host.wss.clients];
+    assert.equal(sockets.length, 2);
+    // Pretend the first socket is not draining.
+    let buffered = 2 * 1024 * 1024;
+    Object.defineProperty(sockets[0], 'bufferedAmount', { get: () => buffered });
+
+    // 1. only the lagging client's own commands are coalesced
+    client.send({ op: 'edit', seq: 2, epoch: 'abcd0123', base: 1, ops: [{ t: 'set', id: 'h.1', p: { vl: -4 } }] });
+    await client.next(m => m.op === 'ack' && m.seq === 2);
+    client.send({ op: 'edit', seq: 3, epoch: 'abcd0123', base: 1, ops: [{ t: 'set', id: 'h.1', p: { vl: -5 } }] });
+    await client.next(m => m.op === 'ack' && m.seq === 3);
+    await other.next(m => m.op === 'state' && m.pipeline[0].vl === -5);
+    assert.equal(client.messages.some(m => m.op === 'state' && m.pipeline[0].vl <= -4), false, 'skipped while behind');
+    buffered = 0;
+    const echo = await client.next(m => m.op === 'state' && m.pipeline[0].vl === -5);
+    assert.equal(echo.seq, 3, 'latest own command seq kept');
+    assert.equal(echo.origin, 'remote');
+
+    // 2. someone else's change in the coalesced window: external, no seq
+    buffered = 2 * 1024 * 1024;
+    client.send({ op: 'edit', seq: 4, epoch: 'abcd0123', base: 1, ops: [{ t: 'set', id: 'h.1', p: { vl: -6 } }] });
+    await client.next(m => m.op === 'ack' && m.seq === 4);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    other.send({ op: 'edit', seq: 2, epoch: 'abcd0123', base: 1, ops: [{ t: 'set', id: 'h.1', p: { vl: -7 } }] });
+    await other.next(m => m.op === 'ack' && m.seq === 2);
+    await client.next(() => false, 200).catch(() => {});
+    buffered = 0;
+    const mixed = await client.next(m => m.op === 'state' && m.pipeline[0].vl === -7);
+    assert.equal('seq' in mixed, false);
+    assert.equal(mixed.origin, 'remote');
+    client.ws.close();
+    other.ws.close();
   } finally {
     await host.dispose();
   }

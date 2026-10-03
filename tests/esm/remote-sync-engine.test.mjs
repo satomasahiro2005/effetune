@@ -508,6 +508,53 @@ test('a failed ack removes the batch, restores the host value and reports the er
     assert.equal(sent.at(-1).op, 'get');
 });
 
+test('an edit carries the slot it was made against and a slot-mismatch ack re-fetches the state', async () => {
+    const clock = new Clock();
+    const sent = [];
+    const errors = [];
+    const adapter = new FakeAdapter();
+    let reply;
+    const engine = new SyncEngine({
+        adapter,
+        send: message => { sent.push(message); return new Promise(resolve => { reply = resolve; }); },
+        now: () => clock.t,
+        setTimer: (fn, ms) => clock.at(ms, fn),
+        clearTimer: handle => clock.cancel(handle),
+        onError: error => errors.push(error.message)
+    });
+    engine.onConnected();
+    engine.onState({ op: 'state', rev: 1, epoch: 'e1', masterBypass: false, slot: 'B', ids: ['h.1'], pipeline: [{ nm: 'Volume', en: true, vl: 0 }] });
+    engine.noteGesture();
+    adapter.model.pipeline[0].vl = -3;
+    engine.markDirty('h.1');
+    await clock.run(100);
+    assert.equal(sent[0].op, 'edit');
+    assert.equal(sent[0].slot, 'B');
+    reply({ op: 'ack', ok: false, error: 'slot-mismatch' });
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(errors, ['slot-mismatch']);
+    assert.equal(sent.at(-1).op, 'get');
+});
+
+test('reconcile applies once more when the first apply left the editor different from the model', () => {
+    const adapter = new FakeAdapter();
+    let calls = 0;
+    const realApply = adapter.apply.bind(adapter);
+    // The first apply drops the bus key of the inserted stage, as a recycled instance keeping stale state would.
+    adapter.apply = ops => {
+        calls += 1;
+        realApply(ops);
+        if (calls === 1) adapter.model.pipeline[0] = { nm: 'Volume', en: true, vl: 0 };
+    };
+    const engine = new SyncEngine({ adapter, send: () => new Promise(() => {}) });
+    engine.onConnected();
+    engine.onState({ op: 'state', rev: 1, epoch: 'e1', masterBypass: false, slot: 'A', ids: ['h.1'], pipeline: [{ nm: 'Volume', en: true, vl: 0, ib: 2 }] });
+    assert.equal(calls, 2);
+    assert.equal(engine.divergences, 1);
+    assert.equal(adapter.model.pipeline[0].ib, 2);
+});
+
 test('states older than the confirmed one are ignored and a new epoch drops pending edits', async () => {
     const clock = new Clock();
     const adapter = new FakeAdapter();

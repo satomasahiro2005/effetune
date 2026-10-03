@@ -342,6 +342,13 @@ class RemoteControl {
     opEdit(msg) {
         this.requireApp();
         if (msg.epoch !== this.epoch) throw new Error('stale-epoch');
+        // Stage ids belong to the pipeline the client was looking at; an edit made
+        // against the other slot must not land in the active one.
+        if (msg.slot !== undefined) {
+            if (msg.slot !== 'A' && msg.slot !== 'B') throw new Error('invalid-op');
+            const active = this.win.audioManager?.currentPipeline === 'B' ? 'B' : 'A';
+            if (msg.slot !== active) throw new Error('slot-mismatch');
+        }
         const checked = validateEdit(this.win, msg.ops, { isHost: true });
         if (!checked.ok) throw new Error(checked.error);
         const result = applyOpsToPipeline(this.win, msg.ops, { registry: this.ids });

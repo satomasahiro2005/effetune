@@ -885,30 +885,45 @@ class RemoteControlHost {
       if (!ws.authenticated || ws.readyState !== 1) continue;
       // A client that cannot keep up skips this push and gets the latest state
       // once it has drained (flushDirtyClients); full states supersede each other.
+      const own = !origin.local && origin.ws === ws && origin.seq !== undefined;
       if (ws.bufferedAmount > STATE_HIGH_WATER_BYTES) {
+        // Remember whose change the coalesced state will carry: still this
+        // client's own command only while every skipped push was just that.
+        if (!ws.stateDirty) ws.dirtyCause = { ownSeq: own ? origin.seq : null, local: !!origin.local };
+        else {
+          const cause = ws.dirtyCause || { ownSeq: null, local: false };
+          ws.dirtyCause = { ownSeq: own && cause.ownSeq !== null ? origin.seq : null, local: cause.local || !!origin.local };
+        }
         ws.stateDirty = true;
         continue;
       }
       // seq only goes to the client that sent the command; for everyone else
       // the change is external.
-      if (!origin.local && origin.ws === ws && origin.seq !== undefined) {
+      if (own) {
         ws.send(JSON.stringify({ ...base, seq: origin.seq }));
       } else {
         ws.send(plain);
       }
       ws.stateDirty = false;
+      ws.dirtyCause = null;
     }
   }
 
   flushDirtyClients() {
     if (!this.wss) return;
-    let plain = null;
     for (const ws of this.wss.clients) {
       if (!ws.stateDirty || !ws.authenticated || ws.readyState !== 1) continue;
       if (ws.bufferedAmount > STATE_DRAIN_BYTES) continue;
       ws.stateDirty = false;
-      plain = plain || JSON.stringify(this.stateMessage({ origin: 'remote' }));
-      ws.send(plain);
+      const cause = ws.dirtyCause;
+      ws.dirtyCause = null;
+      if (cause && cause.ownSeq !== null && !cause.local) {
+        // Only this client's own command was coalesced: it must see its echo as
+        // such (same origin and seq as an undelayed push), not as a remote change.
+        ws.send(JSON.stringify(this.stateMessage({ origin: 'remote', seq: cause.ownSeq })));
+        continue;
+      }
+      ws.send(JSON.stringify(this.stateMessage({ origin: 'remote' })));
     }
   }
 

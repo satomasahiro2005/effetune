@@ -141,6 +141,14 @@ export function applyOpsToPipeline(win, ops, { registry, recycle = false }) {
                     recyclable.delete(delIndex);
                 }
                 if (plugin) {
+                    // applySerializedState only writes the keys the item carries, so
+                    // whatever the old instance had set (buses, channel, enabled)
+                    // would survive in a new stage that omits them. Start from the
+                    // state createPlugin() gives.
+                    plugin.inputBus = null;
+                    plugin.outputBus = null;
+                    plugin.channel = null;
+                    if (op.item.en === undefined && typeof plugin.setEnabled === 'function') plugin.setEnabled(true);
                     applySerializedState(plugin, op.item);
                 } else {
                     plugin = pluginManager.createPlugin(op.item.nm);
