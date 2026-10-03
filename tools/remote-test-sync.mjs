@@ -74,8 +74,10 @@ const shape = (s) => canon({ masterBypass: !!s.masterBypass, pipeline: s.pipelin
 
 // ---- processes -----------------------------------------------------------
 
-const electronExe = path.join(root, 'node_modules', 'electron', 'dist',
-  process.platform === 'win32' ? 'electron.exe' : 'electron');
+const electronDist = path.join(root, 'node_modules', 'electron', 'dist');
+const electronExe = process.platform === 'win32' ? path.join(electronDist, 'electron.exe')
+  : process.platform === 'darwin' ? path.join(electronDist, 'Electron.app', 'Contents', 'MacOS', 'Electron')
+  : path.join(electronDist, 'electron');
 const started = [];
 const browsers = [];
 
@@ -87,7 +89,10 @@ function killTree(child) {
 // The app may relaunch itself (its watchdog does so when a renderer hangs), which
 // leaves a process we have no handle on: find ours by the user-data dir on its command line.
 function killByUserDataDir(dir) {
-  if (process.platform !== 'win32') return;
+  if (process.platform !== 'win32') {
+    spawnSync('pkill', ['-9', '-f', '--', `--user-data-dir=${dir}`], { stdio: 'ignore' });
+    return;
+  }
   const needle = path.normalize(dir).replace(/'/g, "''");
   spawnSync('powershell', ['-NoProfile', '-Command',
     `Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'electron.exe' -and $_.CommandLine -like '*${needle}*' } | ` +
@@ -108,7 +113,8 @@ function launchElectron(label, userData, { cdp, inspect, env = {}, args = [] }) 
   if (!env.EFFETUNE_REMOTE) { delete childEnv.EFFETUNE_REMOTE; delete childEnv.EFFETUNE_REMOTE_TOKEN; }
   const argv = ['.', `--user-data-dir=${userData}`, `--remote-debugging-port=${cdp}`, ...args];
   if (inspect) argv.push(`--inspect=${inspect}`);
-  const child = spawn(electronExe, argv, { cwd: root, env: childEnv, stdio: ['ignore', log, log] });
+  const child = spawn(electronExe, argv, { cwd: root, env: childEnv, stdio: ['ignore', log, log],
+    detached: process.platform !== 'win32' }); // own process group so killTree reaches the helpers
   child.exited = false;
   child.on('exit', (code) => { child.exited = true; out(`[${label}] electron exited (${code})`); });
   started.push(child);

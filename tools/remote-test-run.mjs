@@ -41,8 +41,10 @@ fs.writeFileSync(path.join(userData, 'effetune_presets.json'), JSON.stringify({
   }
 }));
 
-const electronExe = path.join(root, 'node_modules', 'electron', 'dist',
-  process.platform === 'win32' ? 'electron.exe' : 'electron');
+const electronDist = path.join(root, 'node_modules', 'electron', 'dist');
+const electronExe = process.platform === 'win32' ? path.join(electronDist, 'electron.exe')
+  : process.platform === 'darwin' ? path.join(electronDist, 'Electron.app', 'Contents', 'MacOS', 'Electron')
+  : path.join(electronDist, 'electron');
 
 const started = [];
 function launch(label, { forced }) {
@@ -56,7 +58,8 @@ function launch(label, { forced }) {
     env.EFFETUNE_REMOTE_TOKEN = token;
     args.push('--remote');
   }
-  const child = spawn(electronExe, args, { cwd: root, env, stdio: ['ignore', appLog, appLog], windowsHide: false });
+  const child = spawn(electronExe, args, { cwd: root, env, stdio: ['ignore', appLog, appLog], windowsHide: false,
+    detached: process.platform !== 'win32' }); // own process group so killTree reaches the helpers
   child.exited = false;
   child.on('exit', (code) => { child.exited = true; console.log(`[${label}] electron exited (${code})`); });
   started.push(child);
