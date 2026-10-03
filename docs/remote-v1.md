@@ -23,8 +23,8 @@ Clicking it opens the same Remote Control window.
 
 The port is **47300 unless it is busy**. When another process (for example a previous instance
 that is still shutting down) holds it, the app retries the same port 4 times, 750 ms apart, then
-moves up to the next free port (47301 ... 47309). The pairing link, QR code, connect string and
-window title always carry the port that was actually bound, and the Remote Control window shows
+moves up to the next free port (47301 ... 47309). The pairing link and QR code always carry the
+port that was actually bound, and the Remote Control window shows
 it (with a note such as "47300 was busy"). If every port from 47300 to 47309 is taken, the window
 reports the error.
 
@@ -37,9 +37,9 @@ set EFFETUNE_REMOTE_PORT=<port>       first port to try instead of 47300 (fallba
 npm start
 ```
 
-While the server is listening, `[remote] CONNECT STRING: <LAN IPv4>:<port>/<token>` and
-`[remote] PAIRING URL: ...` are printed to the console, and the connect string is appended to
-the window title.
+While the server is listening, only the port is logged to the console
+(`[remote] listening on 0.0.0.0:<port>`). The token and the pairing link are shown in the Remote
+Control window only; they are never written to the console or the window title.
 
 ## Pairing
 

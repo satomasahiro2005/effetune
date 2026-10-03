@@ -12,7 +12,7 @@
 // --remote forces it on at startup; EFFETUNE_REMOTE_TOKEN fixes the token and
 // EFFETUNE_REMOTE_PORT the first port to try (for tests). A busy port is retried
 // a few times, then the next free port above it is used (47300 -> 47301..47309);
-// the pairing URL, QR code, connect string and window title carry the bound port.
+// the pairing URL and QR code carry the bound port.
 
 const { execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
@@ -286,8 +286,7 @@ class RemoteControlHost {
     this.pendingOrigin = null;
     this.activeCause = null;
     this.lastCause = null;
-    this.connectString = null;
-    this.attachedWindows = new WeakSet();
+    this.listening = false;
     this.panelWindow = null;
     this.disposed = false;
     this.toggleQueue = Promise.resolve();
@@ -348,16 +347,12 @@ class RemoteControlHost {
         try { ws.close(CLOSE_UNAUTHORIZED, 'token-changed'); } catch (_) { /* ignore */ }
       }
     }
-    if (this.connectString && this.lan) {
-      this.connectString = `${this.lan.best}:${this.port}/${this.token}`;
-      this.log(`[remote] CONNECT STRING: ${this.connectString}`);
-    }
     this.emitStatus();
     return this.getStatus();
   }
 
   getStatus({ withQr = false } = {}) {
-    const running = !!this.connectString;
+    const running = this.listening;
     const lan = this.lan || pickLanAddress();
     const addresses = lan.offered.map(c => {
       const url = pairingUrl(c.address, this.port, this.token);
@@ -379,7 +374,6 @@ class RemoteControlHost {
       requestedPort: this.basePort,
       token: this.token,
       tokenFromEnvironment: this.tokenFromEnvironment,
-      connectString: this.connectString,
       addresses,
       url: addresses[0]?.url || null,
       webUrl: addresses[0]?.webUrl || null,
@@ -397,7 +391,7 @@ class RemoteControlHost {
   // What the main-window toolbar icon needs: off / listening / N clients.
   getBriefStatus() {
     return {
-      enabled: !!this.connectString,
+      enabled: this.listening,
       wanted: this.enabled,
       port: this.port,
       clients: this.countClients(),
@@ -412,7 +406,6 @@ class RemoteControlHost {
   }
 
   emitStatus() {
-    this.refreshTitle();
     const win = this.getMainWindow();
     if (win?.webContents && !win.isDestroyed?.()) {
       try { win.webContents.send(CHANNELS.status, this.getBriefStatus()); } catch (_) { /* ignore */ }
@@ -502,11 +495,9 @@ class RemoteControlHost {
         return false;
       }
       this.port = port;
-      // Only advertise the connect string once the port is actually bound.
-      this.connectString = `${lan.best}:${this.port}/${this.token}`;
+      // Only advertise the pairing link once the port is actually bound.
+      this.listening = true;
       this.log(`[remote] listening on 0.0.0.0:${this.port}`);
-      this.log(`[remote] CONNECT STRING: ${this.connectString}`);
-      this.log(`[remote] PAIRING URL: ${pairingUrl(lan.best, this.port, this.token)}`);
       if (lan.candidates.length > 1) {
         this.log('[remote] other addresses: ' +
           lan.candidates.map(c => `${c.address} (${c.name})`).join(', '));
@@ -626,8 +617,8 @@ class RemoteControlHost {
       for (const ws of wss.clients) this.clearTelemetry(ws);
     }
     this.sendTelemetryDemand({ on: false, fps: 0 });
-    const wasRunning = !!this.connectString;
-    this.connectString = null;
+    const wasRunning = this.listening;
+    this.listening = false;
     // A failed listen is not an error once the switch is off.
     if (!this.enabled || reason === 'shutdown') this.listenError = null;
     if (wasRunning) this.log(`[remote] stopped (${reason})`);
@@ -635,30 +626,6 @@ class RemoteControlHost {
     await this.stopPromise;
     this.stopPromise = null;
     this.emitStatus();
-  }
-
-  // ---- window title ------------------------------------------------------
-
-  attachWindow(win) {
-    if (!win || this.attachedWindows.has(win)) return;
-    this.attachedWindows.add(win);
-    win.on('page-title-updated', (event, title) => {
-      if (!this.connectString) return;
-      event.preventDefault();
-      try { win.setTitle(this.decorateTitle(title)); } catch (_) { /* ignore */ }
-    });
-    this.refreshTitle();
-  }
-
-  decorateTitle(title) {
-    const base = String(title || 'EffeTune').replace(/ — Remote( Control)? .*$/, '');
-    return this.connectString ? `${base} — Remote Control ${this.connectString}` : base;
-  }
-
-  refreshTitle() {
-    const win = this.getMainWindow();
-    if (!win || win.isDestroyed?.()) return;
-    try { win.setTitle(this.decorateTitle(win.getTitle())); } catch (_) { /* ignore */ }
   }
 
   // ---- settings panel ----------------------------------------------------
@@ -704,7 +671,7 @@ class RemoteControlHost {
 
   // Does host:port name this very server? (Joining it would only show the app itself.)
   isOwnAddress(host, port) {
-    if (!this.connectString || port !== this.port) return false;
+    if (!this.listening || port !== this.port) return false;
     if (host === 'localhost' || host === '[::1]' || host.startsWith('127.')) return true;
     return (this.lan?.candidates || []).some(candidate => candidate.address === host);
   }
@@ -783,7 +750,7 @@ class RemoteControlHost {
 
   handleRendererState(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return false;
-    if (!this.connectString) return false;
+    if (!this.listening) return false;
     this.ingestSnapshot(snapshot);
     return true;
   }
@@ -826,7 +793,7 @@ class RemoteControlHost {
       if (cause) this.activeCause = cause;
       try {
         const result = await this.request(message, timeoutMs);
-        if (result.snapshot && this.connectString) {
+        if (result.snapshot && this.listening) {
           this.ingestSnapshot(result.snapshot, cause || undefined);
         }
         return result;
@@ -1179,7 +1146,7 @@ class RemoteControlHost {
   updateTelemetryDemand() {
     let maxFps = 0;
     let overlays = false;
-    if (this.wss && this.connectString) {
+    if (this.wss && this.listening) {
       for (const ws of this.wss.clients) {
         if (ws.authenticated && ws.telemetry && ws.readyState === 1) {
           maxFps = Math.max(maxFps, ws.telemetry.fps);

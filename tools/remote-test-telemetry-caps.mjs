@@ -43,7 +43,7 @@ function fakeSocket() {
 }
 const clients = new Set();
 host.wss = { clients };
-host.connectString = '127.0.0.1:1/captest';
+host.listening = true;
 
 function frame(index, type, payloadBytes, sequence) {
   const bytes = new Uint8Array(16 + payloadBytes);

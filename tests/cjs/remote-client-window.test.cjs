@@ -37,15 +37,15 @@ function createFakeBrowserWindow(created) {
   };
 }
 
-test('links and connect strings from the Remote Control window are understood', () => {
+test('pairing links from the Remote Control window are understood', () => {
   const link = parseJoinInput('http://192.168.1.5:47300/?t=abcd1234');
   assert.deepEqual([link.ok, link.host, link.port, link.token, link.origin],
     [true, '192.168.1.5', 47300, 'abcd1234', 'http://192.168.1.5:47300']);
   assert.equal(link.url, 'http://192.168.1.5:47300/?t=abcd1234');
   assert.equal(parseJoinInput('ws://10.0.0.2:47301/?t=tok_en-1').origin, 'http://10.0.0.2:47301');
-  assert.equal(parseJoinInput('  192.168.0.9:47302/abcdef  ').token, 'abcdef');
-  assert.equal(parseJoinInput('studio.local:47300/abcd').host, 'studio.local');
-  assert.equal(parseJoinInput('[::1]:47300/abcd').host, '[::1]');
+  assert.equal(parseJoinInput('  http://192.168.0.9:47302/?t=abcdef  ').token, 'abcdef');
+  assert.equal(parseJoinInput('http://studio.local:47300/?t=abcd').host, 'studio.local');
+  assert.equal(parseJoinInput('http://[::1]:47300/?t=abcd').host, '[::1]');
 });
 
 test('other links are refused with a message', () => {
@@ -61,7 +61,7 @@ test('other links are refused with a message', () => {
   assert.equal(bad('http://192.168.1.5:47300/').ok, false, 'no token');
   assert.equal(bad('http://192.168.1.5:47300/?t=a').ok, false, 'token too short');
   assert.equal(bad('http://192.168.1.5:47300/?t=bad%20token').ok, false);
-  assert.equal(bad('192.168.1.5:47300/ab').ok, false);
+  assert.equal(bad('192.168.1.5:47300/abcd1234').ok, false, 'a bare host:port/token is not accepted');
   assert.equal(bad('not a url://x').ok, false);
   assert.equal(bad('http://[').ok, false);
 });
@@ -162,7 +162,7 @@ test('the host knows its own addresses and builds the browser link', () => {
     argv: [],
     log: () => {}
   });
-  host.connectString = '192.168.1.5:47300/abcd1234';
+  host.listening = true;
   host.port = 47300;
   host.lan = { best: '192.168.1.5', candidates: [{ address: '192.168.1.5' }], offered: [{ address: '192.168.1.5', name: 'Wi-Fi' }] };
   assert.equal(host.isOwnAddress('192.168.1.5', 47300), true);
@@ -170,7 +170,7 @@ test('the host knows its own addresses and builds the browser link', () => {
   assert.equal(host.isOwnAddress('localhost', 47300), true);
   assert.equal(host.isOwnAddress('192.168.1.5', 47301), false);
   assert.equal(host.isOwnAddress('192.168.1.6', 47300), false);
-  host.connectString = null;
+  host.listening = false;
   assert.equal(host.isOwnAddress('127.0.0.1', 47300), false, 'a stopped server is not joined by itself');
   const status = host.getStatus({ withQr: true });
   assert.match(status.webUrl, /^http:\/\/[\d.]+:47300\/\?t=abcd1234$/);

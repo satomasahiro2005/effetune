@@ -234,7 +234,14 @@ try {
     const ps = spawnSync('powershell', ['-NoProfile', '-Command',
       `(Get-Process -Id ${child.pid}).MainWindowTitle`], { encoding: 'utf8' });
     const title = (ps.stdout || '').trim();
-    check('window title carries the connect string', new RegExp(` Remote Control \\d+\\.\\d+\\.\\d+\\.\\d+:${port}/${token}`).test(title), title);
+    check('window title does not carry the token, address or port', title !== '' &&
+      !title.includes(token) && !/Remote Control/.test(title) && !title.includes(`:${port}`), title);
+  }
+  {
+    const forcedText = fs.readFileSync(path.join(logDir, 'app-forced.log'), 'utf8');
+    check('console log names the port but never the token or the pairing link',
+      forcedText.includes(`[remote] listening on 0.0.0.0:${port}`) &&
+      !forcedText.includes(token) && !/CONNECT STRING|PAIRING URL/.test(forcedText));
   }
 
   const { opened, panel } = await openPanel();
@@ -425,13 +432,15 @@ try {
   check('busy port: retried the same port before falling back (log)',
     /port 47310 is in use \(attempt 4\/4\)/.test(busyText) && busyText.includes(`using ${fallbackPort} instead`));
   const busyTitle = windowTitle(child);
-  check('busy port: window title advertises the bound port',
-    process.platform !== 'win32' || new RegExp(` Remote Control \\d+\\.\\d+\\.\\d+\\.\\d+:${fallbackPort}/${token}`).test(busyTitle), busyTitle);
+  check('busy port: window title does not carry the token or the port',
+    process.platform !== 'win32' || (busyTitle !== '' && !busyTitle.includes(token) && !busyTitle.includes(`:${fallbackPort}`)), busyTitle);
+  check('busy port: console log does not carry the token',
+    !busyText.includes(token) && !/CONNECT STRING|PAIRING URL/.test(busyText));
   const busyPanel = await openPanel();
   const busyStatus = await busyPanel.panel.evaluate('remotePanel.getStatus()');
-  check('busy port: pairing URL, connect string and status use the bound port',
+  check('busy port: pairing URL and status use the bound port, the status has no connect string',
     busyStatus.port === fallbackPort && busyStatus.requestedPort === port &&
-    busyStatus.url.includes(`:${fallbackPort}/?t=`) && busyStatus.connectString.includes(`:${fallbackPort}/`) &&
+    busyStatus.url.includes(`:${fallbackPort}/?t=`) && busyStatus.connectString === undefined && busyStatus.running === true &&
     busyStatus.addresses.every((a) => a.url.includes(`:${fallbackPort}/?t=`)),
     JSON.stringify({ port: busyStatus.port, url: busyStatus.url }));
   const busyDom = await busyPanel.panel.evaluate(`document.getElementById('status').textContent`);

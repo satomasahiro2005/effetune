@@ -27,29 +27,19 @@ function isJoinableHost(host) {
     /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+local$/.test(lower);
 }
 
-// Accepts the pairing links of the Remote Control window (http:// or ws://
-// with ?t=<token>) and its connect string (<host>:<port>/<token>).
+// Accepts the pairing link of the Remote Control window (http:// or ws://
+// with ?t=<token>).
 function parseJoinInput(input) {
   const text = String(input || '').trim();
   if (!text) return { ok: false, error: 'Enter the link shown in EffeTune on the other computer.' };
-  let host;
-  let port;
-  let token;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
-    let url;
-    try { url = new URL(text); } catch (_) { return { ok: false, error: 'That is not a valid link.' }; }
-    if (url.protocol !== 'http:' && url.protocol !== 'ws:') {
-      return { ok: false, error: 'Use the http:// or ws:// link from the other EffeTune.' };
-    }
-    host = url.hostname;
-    port = url.port;
-    token = url.searchParams.get('t') || '';
-  } else {
-    const match = /^(\[[0-9a-f:]+\]|[^\s/:]+):(\d{1,5})\/([^\s/?]+)\/?$/i.exec(text);
-    if (!match) return { ok: false, error: 'That is not a link or connect string from EffeTune.' };
-    [, host, port, token] = match;
+  let url;
+  try { url = new URL(text); } catch (_) { return { ok: false, error: 'That is not a valid link.' }; }
+  if (url.protocol !== 'http:' && url.protocol !== 'ws:') {
+    return { ok: false, error: 'Use the http:// or ws:// link from the other EffeTune.' };
   }
-  host = host.toLowerCase();
+  const host = url.hostname.toLowerCase();
+  const port = url.port;
+  const token = url.searchParams.get('t') || '';
   if (!/^\d{1,5}$/.test(String(port)) || Number(port) < 1 || Number(port) > 65535) {
     return { ok: false, error: 'The link has no valid port.' };
   }
